@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RedFish Batumi</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="vendor/supabase.js"></script><script src="vendor/purify.min.js"></script><script src="config.js"></script><script src="shared.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #f4f6f7);
+    --text: var(--tg-theme-text-color, #1c2b36);
+    --hint: var(--tg-theme-hint-color, #8b9aa5);
+    --link: var(--tg-theme-link-color, #0e7c86);
+    --btn: var(--tg-theme-button-color, #0e7c86);
+    --btn-text: var(--tg-theme-button-text-color, #ffffff);
+    --secondary-bg: var(--tg-theme-secondary-bg-color, #ffffff);
+    --card: #ffffff;
+    --card-fg: #1c2b36;
+    --card-fg-muted: #6b7d8c;
+    --border: #e3e8ea;
+    --accent: #f2994a;
+    --danger: #e05252;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); padding-bottom: 90px; }
+  .header { padding: 14px 16px 10px; }
+  .header h1 { margin: 0; font-size: 20px; }
+  .header p { margin: 2px 0 0; color: var(--hint); font-size: 13px; }
+  .tabs { display: flex; gap: 8px; overflow-x: auto; padding: 8px 16px 12px; -webkit-overflow-scrolling: touch; }
+  .tab { flex: none; padding: 8px 14px; border-radius: 18px; background: var(--secondary-bg); border: 1px solid var(--border); font-size: 14px; white-space: nowrap; cursor: pointer; }
+  .tab.active { background: var(--btn); color: var(--btn-text); border-color: var(--btn); }
+  .subtabs { display: flex; gap: 6px; overflow-x: auto; padding: 0 16px 10px; }
+  .subtab { flex: none; padding: 6px 12px; border-radius: 14px; background: var(--card); border: 1px solid var(--border); font-size: 13px; white-space: nowrap; cursor: pointer; color: var(--hint); }
+  .subtab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 16px; }
+  .pcard { background: var(--card); border-radius: 14px; overflow: hidden; border: 1px solid var(--border); display: flex; flex-direction: column; cursor: pointer; }
+  .pcard .img { width: 100%; aspect-ratio: 1/1; background: #eef3f4 center/cover no-repeat; display: flex; align-items: center; justify-content: center; font-size: 40px; position: relative; }
+  .pcard .img .photocount { position: absolute; right: 6px; bottom: 6px; background: rgba(0,0,0,.55); color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 8px; }
+  .pcard .body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .pcard .name { font-size: 13px; font-weight: 600; line-height: 1.25; min-height: 32px; color: var(--card-fg); }
+  .pcard .unit { font-size: 11px; color: var(--card-fg-muted); }
+  .pcard .price { font-size: 15px; font-weight: 700; color: var(--link); margin-top: 2px; }
+  .pcard .selectbtn { margin-top: auto; background: var(--btn); color: var(--btn-text); border: none; border-radius: 10px; padding: 8px 0; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .cartbar { position: fixed; left: 12px; right: 12px; bottom: 12px; background: var(--btn); color: var(--btn-text); border-radius: 16px; padding: 14px 18px; display: none; align-items: center; justify-content: space-between; font-weight: 700; box-shadow: 0 4px 16px rgba(0,0,0,.2); cursor: pointer; z-index: 20; }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: none; align-items: flex-end; z-index: 50; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--bg); width: 100%; max-height: 90vh; overflow-y: auto; border-radius: 18px 18px 0 0; padding: 0 0 24px; position: relative; }
+  .modal-inner { padding: 16px; }
+  .modal h2 { margin: 0 0 12px; font-size: 18px; }
+  .gallery { position: relative; width: 100%; aspect-ratio: 1/1; background: #eef3f4; overflow: hidden; border-radius: 18px 18px 0 0; }
+  .gallery img { width: 100%; height: 100%; object-fit: cover; display: none; }
+  .gallery img.active { display: block; }
+  .gallery .nav { position: absolute; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; background: rgba(255,255,255,.85); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; }
+  .gallery .prev { left: 10px; } .gallery .next { right: 10px; }
+  .gallery .dots { position: absolute; bottom: 10px; left: 0; right: 0; display: flex; justify-content: center; gap: 5px; }
+  .gallery .dots span { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,.6); }
+  .gallery .dots span.active { background: #fff; }
+  .opt-group { margin-bottom: 14px; }
+  .opt-group .oglabel { font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+  .opt-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+  .opt-choice { padding: 8px 12px; border-radius: 12px; border: 1.5px solid var(--border); background: var(--card); color: var(--card-fg); font-size: 13px; cursor: pointer; }
+  .opt-choice.active { border-color: var(--btn); background: var(--btn); color: var(--btn-text); }
+  .detail-price { font-size: 22px; font-weight: 800; color: var(--link); margin: 10px 0; }
+  .stepper-row { display: flex; align-items: center; gap: 12px; margin: 14px 0; }
+  .stepper { display: flex; align-items: center; gap: 10px; background: var(--card); border-radius: 12px; padding: 6px 10px; }
+  .stepper button { width: 30px; height: 30px; border: none; border-radius: 8px; background: #fff; color: var(--card-fg); font-size: 18px; cursor: pointer; }
+  .stepper span { min-width: 20px; text-align: center; font-size: 15px; font-weight: 700; color: var(--card-fg); }
+  .cart-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .cart-row .ci { flex: 1; }
+  .cart-row .cn { font-size: 14px; font-weight: 600; }
+  .cart-row .cu { font-size: 12px; color: var(--hint); }
+  .cart-total { display: flex; justify-content: space-between; padding: 14px 0 6px; font-size: 17px; font-weight: 800; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; color: var(--hint); margin-bottom: 4px; }
+  .field input { width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--border); font-size: 15px; background: var(--card); color: var(--card-fg); }
+  .field input::placeholder { color: var(--card-fg-muted); }
+  .primary-btn { width: 100%; background: var(--btn); color: var(--btn-text); border: none; border-radius: 12px; padding: 14px 0; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 6px; }
+  .empty { text-align: center; color: var(--hint); padding: 40px 20px; font-size: 14px; }
+  .success { text-align: center; padding: 30px 10px; }
+  .success .emoji { font-size: 48px; }
+  .close-x { position: absolute; top: 10px; right: 16px; font-size: 22px; color: #fff; background: rgba(0,0,0,.4); width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 5; }
+  .cartOverlay .close-x, .checkoutOverlay .close-x, .successOverlay .close-x { color: var(--hint); background: none; top: 10px; }  .addr-suggestion { padding: 10px 12px; font-size: 13px; color: var(--card-fg); border-bottom: 1px solid var(--border); cursor: pointer; }
+  .addr-suggestion:last-child { border-bottom: none; }
+  .addr-suggestion:active { background: var(--bg); }
+</style>
+<style>#shopSearch,#deliverySlot{display:block;width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font:inherit}#checkoutTotal{font-weight:700}.close{cursor:pointer}button:focus-visible,[role=button]:focus-visible{outline:3px solid #f2994a}</style></head>
+<body>
+
+<div class="header">
+  <h1>🐟 RedFish Batumi</h1>
+  <p>Свежая рыба и морепродукты с доставкой</p>
+</div>
+
+<label style="display:block;padding:12px">Поиск товаров<input type="search" id="shopSearch" placeholder="Название рыбы или продукта"></label><div class="tabs" id="tabs"></div>
+<div class="subtabs" id="subtabs" style="display:none;"></div>
+<div class="grid" id="grid"></div>
+
+<div class="cartbar" id="cartbar">
+  <span id="cartbarText">Корзина: 0</span>
+  <span id="cartbarTotal">0 ₾</span>
+</div>
+
+<div class="modal-overlay" id="detailOverlay">
+  <div class="modal">
+    <span class="close-x" id="closeDetail">&times;</span>
+    <div class="gallery" id="gallery"></div>
+    <div class="modal-inner">
+      <h2 id="detailName"></h2>
+      <div id="detailUnit" style="color:var(--hint); font-size:13px;"></div>
+      <div class="detail-price" id="detailPrice"></div>
+      <div id="optGroups"></div>
+      <div class="stepper-row">
+        <div class="stepper">
+          <button id="detailDec">−</button><span id="detailQty">1</span><button id="detailInc">+</button>
+        </div>
+      </div>
+      <button class="primary-btn" id="addFromDetail">Добавить в корзину</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay cartOverlay" id="cartOverlay">
+  <div class="modal">
+    <span class="close-x" id="closeCart">&times;</span>
+    <div class="modal-inner">
+      <h2>🛒 Корзина</h2>
+      <div id="cartItems"></div>
+      <div class="cart-total"><span>Итого</span><span id="cartTotal">0 ₾</span></div>
+      <button class="primary-btn" id="checkoutBtn">Оформить заказ</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay checkoutOverlay" id="checkoutOverlay">
+  <div class="modal">
+    <span class="close-x" id="closeCheckout">&times;</span>
+    <div class="modal-inner">
+      <h2>Оформление заказа</h2>
+      <div class="field"><label>Имя и фамилия</label><input type="text" id="cName" placeholder="Как к вам обращаться"></div>
+      <div class="field"><label>Номер телефона</label><input type="tel" id="cPhone" placeholder="+995 ..."></div>
+      <div class="field" style="position:relative;">
+        <label>Адрес доставки</label>
+        <input type="text" id="cAddress" placeholder="Улица, дом, квартира" autocomplete="off">
+        <div id="addressSuggestions" style="display:none; position:absolute; z-index:30; top:100%; left:0; right:0; background:var(--card); border:1px solid var(--border); border-radius:10px; margin-top:4px; max-height:220px; overflow-y:auto; box-shadow:0 4px 14px rgba(0,0,0,.15);"></div>
+      </div>
+      <label for="deliverySlot">Зона, слот и стоимость доставки</label><select id="deliverySlot"></select><p><label><input type="checkbox" id="privacyConsent"> Согласен на обработку контактов и адреса для заказа. <a href="privacy.html" target="_blank">Политика</a></label></p><p><label><input type="checkbox" id="marketingConsent"> Хочу получать предложения (необязательно)</label></p><p id="checkoutTotal" role="status"></p><button class="primary-btn" id="submitOrderBtn">Подтвердить заказ</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay successOverlay" id="successOverlay">
+  <div class="modal">
+    <div class="modal-inner">
+      <div class="success">
+        <div class="emoji">✅</div>
+        <h2>Заказ оформлен!</h2>
+        <p style="color:var(--hint);">Мы свяжемся с вами для подтверждения. Спасибо за заказ! 🐟</p>
+        <p id="orderReceipt" role="status"></p><button class="primary-btn" id="successCloseBtn">Готово</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="shop.js"></script>
+</body>
+</html>
