@@ -2,6 +2,7 @@ import { askClaude } from "./providers/claude.js";
 import { askOpenAI } from "./providers/openai.js";
 import {
   fetchGitHubDiff,
+  fetchGitHubPullRequestDiff,
   splitDiffIntoChunks,
   validateGitHubConfig,
   validatePositiveInteger
@@ -18,6 +19,7 @@ const config = {
   githubRepo: env.GITHUB_REPO || "",
   githubBase: env.GITHUB_BASE || "",
   githubHead: env.GITHUB_HEAD || "",
+  githubPrNumber: env.GITHUB_PR_NUMBER ? Number(env.GITHUB_PR_NUMBER) : null,
   maxRounds: Number(env.MAX_ROUNDS || 3),
   maxOutputTokens: Number(env.MAX_OUTPUT_TOKENS || 1800),
   timeoutMs: Number(env.REQUEST_TIMEOUT_MS || 120000),
@@ -116,21 +118,35 @@ async function loadOptionalDiffChunks() {
   validatePositiveInteger(config.maxDiffChars, "MAX_DIFF_CHARS");
   validatePositiveInteger(config.maxDiffTotalBytes, "MAX_DIFF_TOTAL_BYTES");
 
-  const github = validateGitHubConfig({
-    repo: config.githubRepo,
-    base: config.githubBase,
-    head: config.githubHead
-  });
-  if (!github.configured) return [];
+  let raw = "";
 
-  const raw = await fetchGitHubDiff({
-    repo: github.repo,
-    base: github.base,
-    head: github.head,
-    token: config.githubToken,
-    timeoutMs: config.timeoutMs,
-    maxBytes: config.maxDiffTotalBytes
-  });
+  if (config.githubPrNumber !== null) {
+    validatePositiveInteger(config.githubPrNumber, "GITHUB_PR_NUMBER");
+    if (!config.githubRepo) throw new Error("GITHUB_REPO is required when GITHUB_PR_NUMBER is set");
+    raw = await fetchGitHubPullRequestDiff({
+      repo: config.githubRepo,
+      prNumber: config.githubPrNumber,
+      token: config.githubToken,
+      timeoutMs: config.timeoutMs,
+      maxBytes: config.maxDiffTotalBytes
+    });
+  } else {
+    const github = validateGitHubConfig({
+      repo: config.githubRepo,
+      base: config.githubBase,
+      head: config.githubHead
+    });
+    if (!github.configured) return [];
+
+    raw = await fetchGitHubDiff({
+      repo: github.repo,
+      base: github.base,
+      head: github.head,
+      token: config.githubToken,
+      timeoutMs: config.timeoutMs,
+      maxBytes: config.maxDiffTotalBytes
+    });
+  }
 
   return splitDiffIntoChunks(raw, config.maxDiffChars);
 }
