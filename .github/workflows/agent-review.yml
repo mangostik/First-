@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   review:
@@ -62,3 +63,58 @@ jobs:
         with:
           name: agent-review
           path: agent-orchestrator/agent-review.json
+
+      - name: Post review summary to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- agent-review -->';
+            const result = JSON.parse(fs.readFileSync('agent-orchestrator/agent-review.json', 'utf8'));
+            const decision = result.decision || {};
+            const issues = Array.isArray(decision.critical_issues) ? decision.critical_issues : [];
+            const changes = Array.isArray(decision.recommended_changes) ? decision.recommended_changes : [];
+
+            const bullet = items => items.length
+              ? items.slice(0, 8).map(x => '- ' + x).join('\n')
+              : '- None';
+
+            const body = [
+              marker,
+              '## Agent Review',
+              '',
+              '**Final status:** `' + (result.final_status || 'unknown') + '`',
+              '**Decision:** `' + (decision.status || 'unknown') + '`',
+              '**Ready to merge:** `' + String(Boolean(decision.ready_to_merge)) + '`',
+              '**Rounds:** `' + String(result.rounds ?? 0) + '`',
+              '',
+              '### Critical issues',
+              bullet(issues),
+              '',
+              '### Recommended changes',
+              bullet(changes),
+              '',
+              '_Generated automatically by Claude + OpenAI orchestrator._'
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100
+            });
+
+            const existing = comments.find(c =>
+              c.user?.type === 'Bot' && typeof c.body === 'string' && c.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body
+              });
+            }
