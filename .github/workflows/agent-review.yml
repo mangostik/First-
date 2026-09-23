@@ -1,0 +1,64 @@
+name: Agent Review
+
+on:
+  push:
+    branches:
+      - stage2-github-diff
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: agent-orchestrator
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: gpt-5.6
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_MODEL: claude-sonnet-4-5
+      MAX_ROUNDS: "3"
+      MAX_OUTPUT_TOKENS: "1600"
+      REQUEST_TIMEOUT_MS: "120000"
+      MAX_DIFF_CHARS: "20000"
+      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_REPO: ${{ github.repository }}
+      GITHUB_BASE: ${{ github.event.pull_request.base.ref || 'stage1-agent-orchestrator' }}
+      GITHUB_HEAD: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test
+
+      - name: Verify API secrets
+        shell: bash
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "Missing repository secret OPENAI_API_KEY"; exit 1; }
+          test -n "$ANTHROPIC_API_KEY" || { echo "Missing repository secret ANTHROPIC_API_KEY"; exit 1; }
+
+      - name: Run Claude + OpenAI review
+        run: |
+          node src/index.js "Review this GitHub diff. Find only concrete high-impact problems; do not nitpick style." | tee agent-review.json
+
+      - name: Upload review result
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-review
+          path: agent-orchestrator/agent-review.json
