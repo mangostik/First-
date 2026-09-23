@@ -19,13 +19,70 @@ export function validateGitHubConfig({ repo = "", base = "", head = "" }) {
   };
 }
 
+function splitOversizedText(text, maxChars) {
+  const chunks = [];
+  let current = "";
+
+  for (const line of text.split(/(?<=\n)/)) {
+    if (line.length > maxChars) {
+      if (current) {
+        chunks.push(current);
+        current = "";
+      }
+      for (let i = 0; i < line.length; i += maxChars) {
+        chunks.push(line.slice(i, i + maxChars));
+      }
+      continue;
+    }
+
+    if (current.length + line.length > maxChars && current) {
+      chunks.push(current);
+      current = "";
+    }
+    current += line;
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+export function splitDiffIntoChunks(diff, maxChars) {
+  validatePositiveInteger(maxChars, "MAX_DIFF_CHARS");
+  if (typeof diff !== "string" || !diff.trim()) return [];
+  if (diff.length <= maxChars) return [diff];
+
+  const sections = diff.split(/(?=^diff --git )/m).filter(Boolean);
+  const chunks = [];
+  let current = "";
+
+  for (const section of sections) {
+    if (section.length > maxChars) {
+      if (current) {
+        chunks.push(current);
+        current = "";
+      }
+      chunks.push(...splitOversizedText(section, maxChars));
+      continue;
+    }
+
+    if (current.length + section.length > maxChars && current) {
+      chunks.push(current);
+      current = "";
+    }
+    current += section;
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
+
 export async function fetchGitHubDiff({
   repo,
   base,
   head,
   token,
   timeoutMs = 120000,
-  maxBytes = 20000
+  maxBytes = 250000
 }) {
   if (!repo) throw new Error("repo is required, e.g. mangostik/First-");
   if (!base) throw new Error("base is required");
@@ -64,8 +121,8 @@ export async function fetchGitHubDiff({
       if (totalBytes > maxBytes) {
         try { await reader.cancel(); } catch {}
         controller.abort();
-        const error = new Error("Diff exceeds MAX_DIFF_CHARS limit");
-        error.code = "DIFF_TOO_LARGE";
+        const error = new Error("Diff exceeds MAX_DIFF_TOTAL_BYTES limit");
+        error.code = "DIFF_TOTAL_TOO_LARGE";
         error.diffSize = totalBytes;
         error.limit = maxBytes;
         throw error;
