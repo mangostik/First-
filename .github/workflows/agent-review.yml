@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - stage2-github-diff
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
@@ -19,43 +19,43 @@ jobs:
     defaults:
       run:
         working-directory: agent-orchestrator
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL: gpt-5.6
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      ANTHROPIC_MODEL: claude-sonnet-4-5
-      MAX_ROUNDS: "3"
-      MAX_OUTPUT_TOKENS: "1600"
-      REQUEST_TIMEOUT_MS: "120000"
-      MAX_DIFF_CHARS: "20000"
-      GITHUB_TOKEN: ${{ github.token }}
-      GITHUB_REPO: ${{ github.repository }}
-      GITHUB_BASE: ${{ github.event.pull_request.base.ref || 'stage1-agent-orchestrator' }}
-      GITHUB_HEAD: ${{ github.event.pull_request.head.ref || github.ref_name }}
 
     steps:
-      - name: Checkout
+      - name: Checkout trusted orchestrator code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "24"
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install dependencies without lifecycle scripts
+        run: npm install --ignore-scripts
 
-      - name: Run tests
+      - name: Run tests without API secrets
         run: npm test
 
-      - name: Verify API secrets
-        shell: bash
+      - name: Run Claude + OpenAI review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-5.6
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: claude-sonnet-4-5
+          MAX_ROUNDS: "3"
+          MAX_OUTPUT_TOKENS: "1600"
+          REQUEST_TIMEOUT_MS: "120000"
+          MAX_DIFF_CHARS: "20000"
+          MAX_DIFF_TOTAL_BYTES: "250000"
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          GITHUB_BASE: ${{ github.event.pull_request.number && '' || github.event.before || 'stage1-agent-orchestrator' }}
+          GITHUB_HEAD: ${{ github.event.pull_request.number && '' || github.sha }}
         run: |
           test -n "$OPENAI_API_KEY" || { echo "Missing repository secret OPENAI_API_KEY"; exit 1; }
           test -n "$ANTHROPIC_API_KEY" || { echo "Missing repository secret ANTHROPIC_API_KEY"; exit 1; }
-
-      - name: Run Claude + OpenAI review
-        run: |
           node src/index.js "Review this GitHub diff. Find only concrete high-impact problems; do not nitpick style." | tee agent-review.json
 
       - name: Upload review result
@@ -65,7 +65,7 @@ jobs:
           path: agent-orchestrator/agent-review.json
 
       - name: Post review summary to PR
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         uses: actions/github-script@v7
         with:
           script: |
@@ -88,6 +88,7 @@ jobs:
               '**Decision:** `' + (decision.status || 'unknown') + '`',
               '**Ready to merge:** `' + String(Boolean(decision.ready_to_merge)) + '`',
               '**Rounds:** `' + String(result.rounds ?? 0) + '`',
+              '**Chunks:** `' + String(result.chunks_reviewed ?? 0) + '/' + String(result.chunks_total ?? 0) + '`',
               '',
               '### Critical issues',
               bullet(issues),
@@ -100,11 +101,9 @@ jobs:
 
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
-
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number, per_page: 100
             });
-
             const existing = comments.find(c =>
               c.user?.type === 'Bot' && typeof c.body === 'string' && c.body.includes(marker)
             );
