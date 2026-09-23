@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   fetchGitHubDiff,
+  splitDiffIntoChunks,
   validateGitHubConfig,
   validatePositiveInteger
 } from "../src/github.js";
@@ -17,14 +18,30 @@ test("validateGitHubConfig rejects partial configuration", () => {
   );
 });
 
-test("validatePositiveInteger rejects unsafe MAX_DIFF_CHARS values", () => {
+test("validatePositiveInteger rejects unsafe values", () => {
   for (const value of [0, -1, NaN, Infinity, 1.5]) {
-    assert.throws(() => validatePositiveInteger(value, "MAX_DIFF_CHARS"));
+    assert.throws(() => validatePositiveInteger(value, "LIMIT"));
   }
-  assert.equal(validatePositiveInteger(20000, "MAX_DIFF_CHARS"), 20000);
+  assert.equal(validatePositiveInteger(20000, "LIMIT"), 20000);
 });
 
-test("fetchGitHubDiff stops when streamed body exceeds maxBytes", async () => {
+test("splitDiffIntoChunks preserves all content and respects limit", () => {
+  const diff = [
+    "diff --git a/a.js b/a.js\n",
+    "+++ b/a.js\n",
+    "+" + "a".repeat(35) + "\n",
+    "diff --git a/b.js b/b.js\n",
+    "+++ b/b.js\n",
+    "+" + "b".repeat(35) + "\n"
+  ].join("");
+
+  const chunks = splitDiffIntoChunks(diff, 60);
+  assert.ok(chunks.length > 1);
+  assert.equal(chunks.join(""), diff);
+  assert.ok(chunks.every(chunk => chunk.length <= 60));
+});
+
+test("fetchGitHubDiff stops when streamed body exceeds total byte limit", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(
     new ReadableStream({
@@ -45,7 +62,7 @@ test("fetchGitHubDiff stops when streamed body exceeds maxBytes", async () => {
         head: "feature",
         maxBytes: 6
       }),
-      error => error && error.code === "DIFF_TOO_LARGE"
+      error => error && error.code === "DIFF_TOTAL_TOO_LARGE"
     );
   } finally {
     globalThis.fetch = originalFetch;
