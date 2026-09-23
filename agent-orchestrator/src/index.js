@@ -1,5 +1,6 @@
 import { askClaude } from "./providers/claude.js";
 import { askOpenAI } from "./providers/openai.js";
+import { fetchGitHubDiff } from "./github.js";
 import { isConsensus, RESPONSE_SCHEMA_HINT } from "./protocol.js";
 
 const env = process.env;
@@ -8,14 +9,19 @@ const config = {
   openaiModel: env.OPENAI_MODEL,
   anthropicApiKey: env.ANTHROPIC_API_KEY,
   anthropicModel: env.ANTHROPIC_MODEL,
+  githubToken: env.GITHUB_TOKEN || "",
+  githubRepo: env.GITHUB_REPO || "",
+  githubBase: env.GITHUB_BASE || "",
+  githubHead: env.GITHUB_HEAD || "",
   maxRounds: Number(env.MAX_ROUNDS || 3),
   maxOutputTokens: Number(env.MAX_OUTPUT_TOKENS || 1800),
-  timeoutMs: Number(env.REQUEST_TIMEOUT_MS || 120000)
+  timeoutMs: Number(env.REQUEST_TIMEOUT_MS || 120000),
+  maxDiffChars: Number(env.MAX_DIFF_CHARS || 20000)
 };
 
 function readTaskFromArgs() {
   const task = process.argv.slice(2).join(" ").trim();
-  if (!task) throw new Error('Pass a task, e.g. npm start -- "Check stock calculation logic"');
+  if (!task) throw new Error('Pass a task, e.g. npm start -- "Review this GitHub diff"');
   return task;
 }
 
@@ -32,31 +38,39 @@ function jsonRule() {
   ].join("\n");
 }
 
-function claudePrompt({ task, round, openaiReview }) {
+function withDiff(task, diff) {
+  if (!diff) return task;
+  return [task, "", "GitHub diff to review:", diff].join("\n");
+}
+
+function claudePrompt({ task, diff, round, openaiReview }) {
   return [
     "You are Claude acting as the implementation engineer.",
-    "Task:", task, "",
+    "Task and code context:",
+    withDiff(task, diff), "",
     "Round: " + round, "",
     "OpenAI reviewer feedback from the previous round:",
     openaiReview ? JSON.stringify(openaiReview, null, 2) : "None yet.", "",
     "Your job:",
-    "1. Propose or refine the implementation direction.",
-    "2. Address every concrete reviewer issue.",
-    "3. Do not claim agreement just to end the discussion.",
-    "4. If something is objectively impossible, use status=blocked and provide evidence.",
+    "1. Analyze the actual diff when present.",
+    "2. Propose or refine the implementation direction.",
+    "3. Address every concrete reviewer issue.",
+    "4. Do not claim agreement just to end the discussion.",
+    "5. If something is objectively impossible, use status=blocked and provide evidence.",
     "", jsonRule()
   ].join("\n");
 }
 
-function openaiPrompt({ task, round, claudeResponse }) {
+function openaiPrompt({ task, diff, round, claudeResponse }) {
   return [
     "You are OpenAI acting as reviewer, architect, and final arbiter.",
-    "Task:", task, "",
+    "Task and code context:",
+    withDiff(task, diff), "",
     "Round: " + round, "",
     "Claude implementation-engineer response:",
     JSON.stringify(claudeResponse, null, 2), "",
     "Your job:",
-    "1. Review for correctness, architecture, regressions, security, and practical maintainability.",
+    "1. Review the actual diff when present for correctness, architecture, regressions, security, and maintainability.",
     "2. Distinguish critical problems from preferences.",
     "3. If Claude direction is safe, agree.",
     "4. If not, give the smallest concrete set of changes required.",
@@ -65,8 +79,25 @@ function openaiPrompt({ task, round, claudeResponse }) {
   ].join("\n");
 }
 
+async function loadOptionalDiff() {
+  const configured = config.githubRepo && config.githubBase && config.githubHead;
+  if (!configured) return "";
+
+  const raw = await fetchGitHubDiff({
+    repo: config.githubRepo,
+    base: config.githubBase,
+    head: config.githubHead,
+    token: config.githubToken,
+    timeoutMs: config.timeoutMs
+  });
+
+  if (raw.length <= config.maxDiffChars) return raw;
+  return raw.slice(0, config.maxDiffChars) + "\n... [diff truncated by MAX_DIFF_CHARS]";
+}
+
 async function main() {
   const task = readTaskFromArgs();
+  const diff = await loadOptionalDiff();
   let lastOpenAI = null;
   const transcript = [];
 
@@ -74,7 +105,7 @@ async function main() {
     const claude = await askClaude({
       apiKey: config.anthropicApiKey,
       model: config.anthropicModel,
-      prompt: claudePrompt({ task, round, openaiReview: lastOpenAI }),
+      prompt: claudePrompt({ task, diff, round, openaiReview: lastOpenAI }),
       maxOutputTokens: config.maxOutputTokens,
       timeoutMs: config.timeoutMs
     });
@@ -82,7 +113,7 @@ async function main() {
     const openai = await askOpenAI({
       apiKey: config.openaiApiKey,
       model: config.openaiModel,
-      prompt: openaiPrompt({ task, round, claudeResponse: claude }),
+      prompt: openaiPrompt({ task, diff, round, claudeResponse: claude }),
       maxOutputTokens: config.maxOutputTokens,
       timeoutMs: config.timeoutMs
     });
@@ -90,19 +121,19 @@ async function main() {
     transcript.push({ round, claude, openai });
 
     if (isConsensus(claude, openai)) {
-      process.stdout.write(JSON.stringify({ final_status: "CONSENSUS", rounds: round, decision: openai, transcript }, null, 2) + "\n");
+      process.stdout.write(JSON.stringify({ final_status: "CONSENSUS", rounds: round, decision: openai, diff_loaded: Boolean(diff), transcript }, null, 2) + "\n");
       return;
     }
 
     if (claude.status === "blocked") {
-      process.stdout.write(JSON.stringify({ final_status: "BLOCKED", rounds: round, decision: claude, transcript }, null, 2) + "\n");
+      process.stdout.write(JSON.stringify({ final_status: "BLOCKED", rounds: round, decision: claude, diff_loaded: Boolean(diff), transcript }, null, 2) + "\n");
       return;
     }
 
     lastOpenAI = openai;
   }
 
-  process.stdout.write(JSON.stringify({ final_status: "FINAL_DECISION", rounds: config.maxRounds, decision: lastOpenAI, transcript }, null, 2) + "\n");
+  process.stdout.write(JSON.stringify({ final_status: "FINAL_DECISION", rounds: config.maxRounds, decision: lastOpenAI, diff_loaded: Boolean(diff), transcript }, null, 2) + "\n");
 }
 
 main().catch(error => {
