@@ -92,12 +92,38 @@ async function loadOptionalDiff() {
   });
 
   if (raw.length <= config.maxDiffChars) return raw;
-  return raw.slice(0, config.maxDiffChars) + "\n... [diff truncated by MAX_DIFF_CHARS]";
+  const error = new Error("Diff exceeds MAX_DIFF_CHARS limit");
+  error.code = "DIFF_TOO_LARGE";
+  error.diffSize = raw.length;
+  error.limit = config.maxDiffChars;
+  throw error;
 }
 
 async function main() {
   const task = readTaskFromArgs();
-  const diff = await loadOptionalDiff();
+  let diff = "";
+  try {
+    diff = await loadOptionalDiff();
+  } catch (error) {
+    if (error && error.code === "DIFF_TOO_LARGE") {
+      process.stdout.write(JSON.stringify({
+        final_status: "BLOCKED",
+        reason: "diff_too_large",
+        diff_size: error.diffSize,
+        limit: error.limit,
+        decision: {
+          status: "blocked",
+          critical_issues: ["GitHub diff exceeds MAX_DIFF_CHARS and cannot be fully reviewed safely."],
+          recommended_changes: ["Increase MAX_DIFF_CHARS or reduce/split the diff before review."],
+          ready_to_merge: false,
+          evidence: ["Review stopped before any agent call because the complete diff was not available."]
+        },
+        transcript: []
+      }, null, 2) + "\n");
+      return;
+    }
+    throw error;
+  }
   let lastOpenAI = null;
   const transcript = [];
 
