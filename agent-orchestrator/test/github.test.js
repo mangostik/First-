@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   fetchGitHubDiff,
+  fetchGitHubPullRequestDiff,
   splitDiffIntoChunks,
   validateGitHubConfig,
   validatePositiveInteger
@@ -64,6 +65,28 @@ test("fetchGitHubDiff stops when streamed body exceeds total byte limit", async 
       }),
       error => error && error.code === "DIFF_TOTAL_TOO_LARGE"
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test("fetchGitHubPullRequestDiff uses the PR endpoint and preserves diff content", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = "";
+  globalThis.fetch = async (url) => {
+    requestedUrl = String(url);
+    return new Response("diff --git a/a.js b/a.js\n+ok\n", { status: 200 });
+  };
+
+  try {
+    const diff = await fetchGitHubPullRequestDiff({
+      repo: "owner/repo",
+      prNumber: 42,
+      maxBytes: 1000
+    });
+    assert.match(requestedUrl, /repos\/owner\/repo\/pulls\/42$/);
+    assert.match(diff, /\+ok/);
   } finally {
     globalThis.fetch = originalFetch;
   }
