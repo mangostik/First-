@@ -53,13 +53,17 @@ async function requestOnce({ apiKey, model, prompt, maxOutputTokens, timeoutMs }
   }
 }
 
+export function computeRetryTokenLimit(maxOutputTokens) {
+  return Math.max(maxOutputTokens, Math.min(maxOutputTokens * 2, 8000));
+}
+
 export async function askOpenAI({ apiKey, model, prompt, maxOutputTokens, timeoutMs }) {
   if (!apiKey) throw new Error("OPENAI_API_KEY is required");
   if (!model) throw new Error("OPENAI_MODEL is required");
 
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const tokenLimit = attempt === 1 ? maxOutputTokens : Math.min(maxOutputTokens * 2, 8000);
+    const tokenLimit = attempt === 1 ? maxOutputTokens : computeRetryTokenLimit(maxOutputTokens);
     const data = await requestOnce({ apiKey, model, prompt, maxOutputTokens: tokenLimit, timeoutMs });
     const text = collectOutputText(data);
 
