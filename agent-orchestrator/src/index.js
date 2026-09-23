@@ -58,11 +58,26 @@ function withDiff(task, diff, chunkIndex, chunkCount) {
   ].join("\n");
 }
 
+function runtimeEvidence({ diffLoaded }) {
+  return [
+    "Runtime evidence from the current process:",
+    "- Node.js is currently executing this orchestrator as " + process.version + ".",
+    "- Configured Anthropic model: " + config.anthropicModel + ". If Claude is producing this response, Anthropic accepted this model identifier for the current call.",
+    "- Configured OpenAI model: " + config.openaiModel + ". If OpenAI is producing its response, OpenAI accepted this model identifier for the current call.",
+    diffLoaded
+      ? "- GitHub diff retrieval already succeeded in this run using the current GitHub request/auth configuration."
+      : "- No GitHub diff was loaded in this run.",
+    "- Successful runtime evidence outranks unsupported recollection about whether a model, Node version, endpoint, or auth scheme exists.",
+    "- Claims about external APIs, model availability, or runtime versions MUST NOT be marked critical unless they are supported by an observed current-run failure or authoritative evidence included in the task context."
+  ].join("\n");
+}
+
 function claudePrompt({ task, diff, chunkIndex, chunkCount, round, openaiReview }) {
   return [
     "You are Claude acting as the implementation engineer.",
     "Task and code context:",
     withDiff(task, diff, chunkIndex, chunkCount), "",
+    runtimeEvidence({ diffLoaded: Boolean(diff) }), "",
     "Round: " + round, "",
     "OpenAI reviewer feedback from the previous round:",
     openaiReview ? JSON.stringify(openaiReview, null, 2) : "None yet.", "",
@@ -81,6 +96,7 @@ function openaiPrompt({ task, diff, chunkIndex, chunkCount, round, claudeRespons
     "You are OpenAI acting as reviewer, architect, and final arbiter.",
     "Task and code context:",
     withDiff(task, diff, chunkIndex, chunkCount), "",
+    runtimeEvidence({ diffLoaded: Boolean(diff) }), "",
     "Round: " + round, "",
     "Claude implementation-engineer response:",
     JSON.stringify(claudeResponse, null, 2), "",
@@ -90,6 +106,8 @@ function openaiPrompt({ task, diff, chunkIndex, chunkCount, round, claudeRespons
     "3. If Claude direction is safe, agree.",
     "4. If not, give the smallest concrete set of changes required.",
     "5. You are the arbiter if the maximum round limit is reached.",
+    "6. Reject Claude claims that contradict successful current-run evidence unless stronger evidence is present.",
+    "7. Do not treat remembered product/version facts as critical evidence by themselves.",
     "", jsonRule()
   ].join("\n");
 }
@@ -144,8 +162,8 @@ async function reviewChunk({ task, diff, chunkIndex, chunkCount }) {
       return { final_status: "CONSENSUS", rounds: round, decision: openai, transcript };
     }
 
-    if (claude.status === "blocked") {
-      return { final_status: "BLOCKED", rounds: round, decision: claude, transcript };
+    if (claude.status === "blocked" && openai.status === "blocked") {
+      return { final_status: "BLOCKED", rounds: round, decision: openai, transcript };
     }
 
     lastOpenAI = openai;
