@@ -76,19 +76,8 @@ export function splitDiffIntoChunks(diff, maxChars) {
   return chunks;
 }
 
-export async function fetchGitHubDiff({
-  repo,
-  base,
-  head,
-  token,
-  timeoutMs = 120000,
-  maxBytes = 250000
-}) {
-  if (!repo) throw new Error("repo is required, e.g. mangostik/First-");
-  if (!base) throw new Error("base is required");
-  if (!head) throw new Error("head is required");
+async function fetchDiffUrl({ url, token, timeoutMs, maxBytes }) {
   validatePositiveInteger(maxBytes, "maxBytes");
-
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -99,14 +88,11 @@ export async function fetchGitHubDiff({
     };
     if (token) headers.Authorization = "Bearer " + token;
 
-    const url = "https://api.github.com/repos/" + repo + "/compare/" +
-      encodeURIComponent(base) + "..." + encodeURIComponent(head);
-
     const response = await fetch(url, { headers, signal: controller.signal });
     if (!response.ok) {
-      throw new Error("GitHub compare error " + response.status + ": " + await response.text());
+      throw new Error("GitHub diff error " + response.status + ": " + await response.text());
     }
-    if (!response.body) throw new Error("GitHub compare returned no response body");
+    if (!response.body) throw new Error("GitHub diff returned no response body");
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -132,9 +118,41 @@ export async function fetchGitHubDiff({
     }
 
     diff += decoder.decode();
-    if (!diff.trim()) throw new Error("GitHub compare returned an empty diff");
+    if (!diff.trim()) throw new Error("GitHub returned an empty diff");
     return diff;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function fetchGitHubDiff({
+  repo,
+  base,
+  head,
+  token,
+  timeoutMs = 120000,
+  maxBytes = 250000
+}) {
+  if (!repo) throw new Error("repo is required, e.g. mangostik/First-");
+  if (!base) throw new Error("base is required");
+  if (!head) throw new Error("head is required");
+
+  const url = "https://api.github.com/repos/" + repo + "/compare/" +
+    encodeURIComponent(base) + "..." + encodeURIComponent(head);
+
+  return fetchDiffUrl({ url, token, timeoutMs, maxBytes });
+}
+
+export async function fetchGitHubPullRequestDiff({
+  repo,
+  prNumber,
+  token,
+  timeoutMs = 120000,
+  maxBytes = 250000
+}) {
+  if (!repo) throw new Error("repo is required, e.g. mangostik/First-");
+  validatePositiveInteger(prNumber, "GITHUB_PR_NUMBER");
+
+  const url = "https://api.github.com/repos/" + repo + "/pulls/" + prNumber;
+  return fetchDiffUrl({ url, token, timeoutMs, maxBytes });
 }
