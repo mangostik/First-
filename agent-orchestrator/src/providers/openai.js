@@ -23,9 +23,7 @@ function collectOutputText(data) {
     .join("\n");
 }
 
-export async function askOpenAI({ apiKey, model, prompt, maxOutputTokens, timeoutMs }) {
-  if (!apiKey) throw new Error("OPENAI_API_KEY is required");
-  if (!model) throw new Error("OPENAI_MODEL is required");
+async function requestOnce({ apiKey, model, prompt, maxOutputTokens, timeoutMs }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -49,12 +47,46 @@ export async function askOpenAI({ apiKey, model, prompt, maxOutputTokens, timeou
       signal: controller.signal
     });
     if (!response.ok) throw new Error("OpenAI API error " + response.status + ": " + await response.text());
-    const data = await response.json();
+    return response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function askOpenAI({ apiKey, model, prompt, maxOutputTokens, timeoutMs }) {
+  if (!apiKey) throw new Error("OPENAI_API_KEY is required");
+  if (!model) throw new Error("OPENAI_MODEL is required");
+
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const tokenLimit = attempt === 1 ? maxOutputTokens : Math.min(maxOutputTokens * 2, 8000);
+    const data = await requestOnce({ apiKey, model, prompt, maxOutputTokens: tokenLimit, timeoutMs });
     const text = collectOutputText(data);
-    if (!text.trim()) {
-      throw new Error("OpenAI returned no text output. status=" + String(data.status || "unknown") +
-        " incomplete=" + JSON.stringify(data.incomplete_details || null));
+
+    if (data.status === "incomplete") {
+      lastError = new Error(
+        "OpenAI response incomplete: " + JSON.stringify(data.incomplete_details || null)
+      );
+      continue;
     }
-    return normalizeAgentResponse(extractJson(text));
-  } finally { clearTimeout(timeout); }
+
+    if (!text.trim()) {
+      lastError = new Error(
+        "OpenAI returned no text output. status=" + String(data.status || "unknown") +
+        " incomplete=" + JSON.stringify(data.incomplete_details || null)
+      );
+      continue;
+    }
+
+    try {
+      return normalizeAgentResponse(extractJson(text));
+    } catch (error) {
+      lastError = new Error(
+        "OpenAI returned invalid structured output on attempt " + attempt +
+        ": " + error.message
+      );
+    }
+  }
+
+  throw lastError || new Error("OpenAI structured output failed after retries");
 }
