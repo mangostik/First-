@@ -1,0 +1,4 @@
+{
+  "id": "smoke-20260924-0050",
+  "task": "Connectivity smoke test. Confirm that the Claude implementation engineer and OpenAI reviewer/arbiter can both respond through the orchestrator. Do not propose code changes. Return agree if the agent loop is functioning normally."
+}
