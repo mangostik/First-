@@ -51,8 +51,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPO: ${{ github.repository }}
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
-          GITHUB_BASE: ${{ github.event.pull_request.number && '' || github.event.before || 'stage1-agent-orchestrator' }}
-          GITHUB_HEAD: ${{ github.event.pull_request.number && '' || github.sha }}
+          GITHUB_BASE: ${{ github.event.pull_request.number && '' || 'stage1-agent-orchestrator' }}
+          GITHUB_HEAD: ${{ github.event.pull_request.number && '' || github.ref_name }}
         run: |
           test -n "$OPENAI_API_KEY" || { echo "Missing repository secret OPENAI_API_KEY"; exit 1; }
           test -n "$ANTHROPIC_API_KEY" || { echo "Missing repository secret ANTHROPIC_API_KEY"; exit 1; }
