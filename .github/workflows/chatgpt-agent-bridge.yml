@@ -1,0 +1,109 @@
+name: ChatGPT Agent Bridge
+
+on:
+  push:
+    branches:
+      - stage4-mcp
+    paths:
+      - ".agent-requests/*.json"
+
+permissions:
+  contents: write
+
+jobs:
+  run-agent-task:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout request commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install orchestrator dependencies
+        working-directory: agent-orchestrator
+        run: npm install --ignore-scripts
+
+      - name: Run tests
+        working-directory: agent-orchestrator
+        run: npm test
+
+      - name: Resolve request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" -- '.agent-requests/*.json' | tail -n 1)"
+          if [ -z "$REQUEST_FILE" ]; then
+            echo "No agent request found in commit"
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const file = process.env.REQUEST_FILE;
+          const request = JSON.parse(fs.readFileSync(file, "utf8"));
+          const id = String(request.id || "").trim();
+          const task = String(request.task || "").trim();
+          if (!/^[A-Za-z0-9._-]{1,100}$/.test(id)) throw new Error("Invalid request id");
+          if (!task || task.length > 12000) throw new Error("Invalid task");
+          const optional = {
+            GITHUB_REPO: request.repo,
+            GITHUB_PR_NUMBER: request.prNumber,
+            GITHUB_BASE: request.base,
+            GITHUB_HEAD: request.head
+          };
+          const envFile = process.env.GITHUB_ENV;
+          fs.appendFileSync(envFile, "AGENT_REQUEST_ID=" + id + "\n");
+          fs.appendFileSync(envFile, "AGENT_TASK<<__TASK__\n" + task + "\n__TASK__\n");
+          for (const [key, value] of Object.entries(optional)) {
+            if (value !== undefined && value !== null && String(value).trim() !== "") {
+              fs.appendFileSync(envFile, key + "=" + String(value).trim() + "\n");
+            }
+          }
+          NODE
+        env:
+          REQUEST_FILE: ${{ steps.request.outputs.file || '' }}
+
+      - name: Run Claude + OpenAI orchestrator
+        working-directory: agent-orchestrator
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_MODEL: gpt-5.6
+          ANTHROPIC_MODEL: claude-sonnet-4-5
+          MAX_ROUNDS: "3"
+          MAX_OUTPUT_TOKENS: "1800"
+          REQUEST_TIMEOUT_MS: "120000"
+          MAX_DIFF_CHARS: "20000"
+          MAX_DIFF_TOTAL_BYTES: "250000"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ../.agent-results
+          node src/index.js "$AGENT_TASK" > "../.agent-results/$AGENT_REQUEST_ID.json"
+
+      - name: Validate result
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const p = ".agent-results/" + process.env.AGENT_REQUEST_ID + ".json";
+          const result = JSON.parse(fs.readFileSync(p, "utf8"));
+          if (!result.final_status || !result.decision) throw new Error("Invalid orchestrator result");
+          NODE
+
+      - name: Commit result
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ".agent-results/$AGENT_REQUEST_ID.json"
+          git commit -m "Agent result: $AGENT_REQUEST_ID"
+          git push origin HEAD:stage4-mcp
