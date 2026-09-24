@@ -40,8 +40,7 @@ function createAgentServer() {
       try {
         const result = await runAgentReview(input);
         return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-          structuredContent: result
+          content: [{ type: "text", text: JSON.stringify(result) }]
         };
       } catch (error) {
         return {
@@ -68,13 +67,7 @@ function createAgentServer() {
           stage: 4,
           tools: ["run_agent_review", "orchestrator_status"]
         })
-      }],
-      structuredContent: {
-        ok: true,
-        service: "fishcrm-agent-orchestrator",
-        stage: 4,
-        tools: ["run_agent_review", "orchestrator_status"]
-      }
+      }]
     })
   );
 
