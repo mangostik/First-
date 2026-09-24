@@ -1,71 +1,101 @@
-# FishCRM Agent Orchestrator — Stage 1
+# FishCRM Agent Orchestrator
 
-Stage 1 proves the core loop:
+Automated Claude ↔ OpenAI engineering review loop with GitHub diff support and an MCP bridge for ChatGPT.
 
-**Task → Claude (implementation engineer) → OpenAI (reviewer/arbiter) → repeat → CONSENSUS / FINAL_DECISION**
+## Current stages
 
-This stage intentionally does not modify FishCRM, GitHub branches, PRs, or Supabase automatically.
+- Stage 1 — structured Claude/OpenAI debate loop.
+- Stage 2 — GitHub branch / PR diff review.
+- Stage 3 — GitHub Actions automation, PR summaries, safe large-diff chunking, cross-chunk synthesis, and OpenAI final arbitration.
+- Stage 4 — remote MCP bridge exposing the orchestrator to ChatGPT.
 
-## Roles
+## Agent roles
 
 - Claude — implementation engineer.
-- OpenAI — reviewer, architect, and arbiter.
-- Maximum rounds are controlled by `MAX_ROUNDS` (default: 3).
-- Consensus requires both agents to return `agree`, no critical issues, and `ready_to_merge=true`.
-- If the round limit is reached, the last OpenAI review becomes `FINAL_DECISION`.
-- Claude may return `blocked` only for an objective blocker and should provide `evidence`.
+- OpenAI — reviewer, architect, and final arbiter.
+- Consensus requires both agents to agree, no critical issues, and `ready_to_merge=true`.
+- Objective blockers are preserved and must be supported by evidence.
+- Multi-chunk diffs receive a final cross-chunk OpenAI synthesis before whole-change consensus can be emitted.
 
-## Safety / budget controls
+## Environment
 
-- API keys live only in environment variables.
-- Models are configured via environment variables, not hard-coded.
-- `MAX_ROUNDS` limits debate length.
-- `MAX_OUTPUT_TOKENS` limits each model response.
-- `REQUEST_TIMEOUT_MS` prevents a hung request from blocking forever.
-- Responses are validated before the loop continues.
-
-## Setup
-
-Requires Node.js 20+.
-
-Copy `.env.example` values into your environment and fill in:
+Required for agent calls:
 
 ```text
 OPENAI_API_KEY=...
-OPENAI_MODEL=...
+OPENAI_MODEL=gpt-5.6
 ANTHROPIC_API_KEY=...
-ANTHROPIC_MODEL=...
+ANTHROPIC_MODEL=claude-sonnet-4-5
 ```
 
-Then run:
+Optional controls:
+
+```text
+MAX_ROUNDS=3
+MAX_OUTPUT_TOKENS=1800
+REQUEST_TIMEOUT_MS=120000
+MAX_DIFF_CHARS=20000
+MAX_DIFF_TOTAL_BYTES=250000
+GITHUB_TOKEN=...
+GITHUB_REPO=owner/repo
+GITHUB_PR_NUMBER=123
+# OR:
+GITHUB_BASE=main
+GITHUB_HEAD=feature-branch
+```
+
+## CLI
 
 ```bash
+npm install
 npm test
-npm start -- "Review how FishCRM should prevent negative stock"
+npm start -- "Review this GitHub change"
 ```
 
-The process prints one JSON result containing `final_status`, number of rounds, the final decision, and the complete Stage 1 transcript.
+The process returns structured JSON containing `final_status`, the final decision, rounds, chunk metadata, and transcript.
 
-## Response protocol
+## Stage 4 MCP bridge
 
-Each agent must return:
+The MCP server exposes:
 
-```json
-{
-  "status": "agree | disagree | needs_changes | blocked",
-  "critical_issues": [],
-  "recommended_changes": [],
-  "ready_to_merge": false,
-  "evidence": []
-}
+- `run_agent_review` — runs a task through Claude and OpenAI. It can optionally review a GitHub PR or branch comparison.
+- `orchestrator_status` — lightweight health/capability check.
+
+Run locally:
+
+```bash
+npm install
+npm run start:mcp
 ```
 
-## Roadmap
+Default endpoint:
 
-**Stage 1 — now:** prove automatic structured Claude ↔ OpenAI discussion.
+```text
+http://localhost:3000/mcp
+```
 
-**Stage 2:** connect the loop to GitHub task branches and actual diffs. Claude proposes/implements changes; OpenAI reviews the real diff; discussion is stored in PRs; nobody writes directly to `main`.
+For a remote deployment, set `PORT` as required by the host. The included Dockerfile runs the MCP server on Node 24.
 
-**Stage 3:** add GitHub webhooks so continuation is event-driven instead of polling.
+### MCP access protection
 
-**Stage 4:** expose the orchestrator through MCP/custom app so ChatGPT can call Claude through the orchestrator directly.
+If `MCP_ACCESS_TOKEN` is set, requests must include:
+
+```text
+Authorization: Bearer <token>
+```
+
+Do not expose a paid-agent MCP endpoint publicly without authentication or an equivalent access-control layer.
+
+### ChatGPT connection
+
+ChatGPT custom apps/plugins connect to a **remote HTTPS MCP endpoint** using Streamable HTTP. The deployed URL should end in `/mcp`. ChatGPT does not connect directly to a localhost MCP server; use a remote deployment or a supported secure tunnel.
+
+After the endpoint is reachable, add it as a custom MCP app/plugin in ChatGPT developer mode and scan its tools. The expected tools are `run_agent_review` and `orchestrator_status`.
+
+## Safety
+
+- API keys remain in environment/secrets only.
+- Diffs are treated as untrusted external data.
+- Large diffs have bounded total size and are reviewed in chunks.
+- The OpenAI arbiter can reject unsupported Claude claims when runtime evidence contradicts them.
+- GitHub changes are reviewed through branches/PRs; the orchestrator does not write directly to `main`.
