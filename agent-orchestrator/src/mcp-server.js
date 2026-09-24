@@ -115,5 +115,5 @@ createServer(async (req, res) => {
     await server.close().catch(() => {});
   }
 }).listen(port, host, () => {
-  console.log("MCP server listening on http://" + host + ":" + port + mcpPath);
+  console.log("MCP server listening on http://" + host + ":" + port + (pathToken ? "/mcp/<private>" : "/mcp"));
 });
