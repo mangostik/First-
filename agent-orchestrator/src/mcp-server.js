@@ -31,6 +31,11 @@ function createAgentServer() {
       title: "Run agent review",
       description:
         "Run the Claude ↔ OpenAI orchestrator for a task. Optionally review a GitHub PR or branch diff. Returns the structured final decision and transcript.",
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: true,
+        destructiveHint: false
+      },
       inputSchema: z.object({
         task: z.string().min(1).max(12000),
         repo: z.string().min(3).max(300).optional(),
@@ -59,6 +64,11 @@ function createAgentServer() {
     {
       title: "Orchestrator status",
       description: "Check whether the MCP bridge is running and which capabilities it exposes.",
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+        destructiveHint: false
+      },
       inputSchema: z.object({})
     },
     async () => ({
