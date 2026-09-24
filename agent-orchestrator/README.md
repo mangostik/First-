@@ -68,23 +68,27 @@ npm install
 npm run start:mcp
 ```
 
-Default endpoint:
+Default local endpoint:
 
 ```text
 http://localhost:3000/mcp
 ```
 
+For a private personal deployment, set `MCP_PATH_TOKEN`. The MCP endpoint becomes:
+
+```text
+https://<host>/mcp/<MCP_PATH_TOKEN>
+```
+
+The server also exposes an unauthenticated `/health` endpoint for platform health checks.
+
 For a remote deployment, set `PORT` as required by the host. The included Dockerfile runs the MCP server on Node 24.
 
 ### MCP access protection
 
-If `MCP_ACCESS_TOKEN` is set, requests must include:
+`MCP_PATH_TOKEN` can make the MCP endpoint an unguessable private path for a personal deployment. `MCP_ACCESS_TOKEN` remains available for non-ChatGPT clients that can send a custom Bearer token.
 
-```text
-Authorization: Bearer <token>
-```
-
-Do not expose a paid-agent MCP endpoint publicly without authentication or an equivalent access-control layer.
+Do not expose a paid-agent MCP endpoint at a predictable unauthenticated URL. For broader/shared use, use standards-compliant OAuth instead of relying only on a secret path.
 
 ### ChatGPT connection
 
