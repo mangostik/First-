@@ -37,6 +37,7 @@
 - [x] Adapter-интерфейс agent runner.
 - [x] Конфигурация mock/real runner.
 - [x] Подключение существующего Claude/OpenAI review loop как real runner.
+- [x] Таймаут Claude/OpenAI review loop увеличен до 15 минут (`900000` мс) в локальном default и CI-конфигурации.
 - [x] Deterministic mock runner для тестов.
 - [x] Integration lifecycle tests: `create → planning → running → completed/failed`.
 - [x] Worktree/branch isolation для изменяющих код агентов.
@@ -76,4 +77,4 @@
 
 ## Текущий этап
 
-Этап Integrator, обязательный project test gate и job-level Reviewer завершён. Lifecycle: `subtasks completed → integrating → project tests → reviewing → completed/failed`; test evidence сохраняется в job result, а Reviewer отклоняет job без успешных тестов. Добавлен CI workflow для установки зависимостей и запуска MCP contract, orchestration, test-runner и legacy тестов; требуется дождаться фактического CI run. Следующий этап после зелёного CI — реальный параллельный запуск двух независимых agent tasks с `concurrency=2` без автоматического merge.
+Этап Integrator, обязательный project test gate и job-level Reviewer завершён. Lifecycle: `subtasks completed → integrating → project tests → reviewing → completed/failed`; test evidence сохраняется в job result, а Reviewer отклоняет job без успешных тестов. Добавлен CI workflow для установки зависимостей и запуска MCP contract, orchestration, test-runner и legacy тестов; timeout review loop установлен в 15 минут. Следующий этап после зелёного CI — реальный параллельный запуск двух независимых agent tasks с `concurrency=2` без автоматического merge.

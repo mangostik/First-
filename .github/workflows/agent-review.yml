@@ -15,7 +15,7 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: agent-orchestrator
@@ -45,7 +45,7 @@ jobs:
           ANTHROPIC_MODEL: claude-sonnet-4-5
           MAX_ROUNDS: "3"
           MAX_OUTPUT_TOKENS: "1600"
-          REQUEST_TIMEOUT_MS: "120000"
+          REQUEST_TIMEOUT_MS: "900000"
           MAX_DIFF_CHARS: "20000"
           MAX_DIFF_TOTAL_BYTES: "250000"
           GITHUB_TOKEN: ${{ github.token }}
