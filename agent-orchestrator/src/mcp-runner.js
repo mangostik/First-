@@ -38,7 +38,7 @@ export function runAgentReview(input, options = {}) {
     execFile(
       process.execPath,
       [orchestratorPath, task],
-      { env, timeout: timeoutMs, maxBuffer },
+      { env, timeout: timeoutMs, maxBuffer, signal: options.signal },
       (error, stdout, stderr) => {
         if (error) {
           const wrapped = new Error(
