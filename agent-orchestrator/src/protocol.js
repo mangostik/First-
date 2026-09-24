@@ -24,6 +24,16 @@ export function extractJson(text) {
   throw new Error("No JSON object found in model response");
 }
 
+export function unstructuredAgentResponse(provider) {
+  return normalizeAgentResponse({
+    status: "blocked",
+    critical_issues: [],
+    recommended_changes: ["Repeat the review after the " + provider + " response format is repaired."],
+    ready_to_merge: false,
+    evidence: [provider + " returned no valid structured response after one format-recovery retry."]
+  });
+}
+
 export function isConsensus(claude, openai) {
   return claude.status === "agree" && openai.status === "agree" &&
     claude.critical_issues.length === 0 && openai.critical_issues.length === 0 &&
