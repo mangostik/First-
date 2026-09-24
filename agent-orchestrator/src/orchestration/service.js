@@ -12,7 +12,11 @@ import { createConfiguredTestRunner } from "./test-runner.js";
 export class OrchestrationService {
   constructor({ store, runner, reviewer, testRunner, schedulerOptions = {}, onStatusChange, workspaceManager } = {}) {
     this.store = store || new JsonJobStore(process.env.JOB_STORAGE_DIR || join(process.cwd(), ".orchestration-jobs"));
-    this.runner = runner || createConfiguredAgentRunner();
+    const configuredRunner = runner || createConfiguredAgentRunner();
+    this.runner = typeof configuredRunner === "function"
+      ? configuredRunner
+      : configuredRunner?.run?.bind(configuredRunner);
+    if (!this.runner) throw new Error("runner must be a function or adapter with run()");
     this.reviewer = reviewer || createConfiguredJobReviewer();
     this.testRunner = testRunner || createConfiguredTestRunner();
     this.workspaceManager = workspaceManager || createConfiguredWorkspaceManager();
@@ -42,7 +46,7 @@ export class OrchestrationService {
       const scheduler = new DependencyScheduler({
         store: this.store,
         runner: async context => this.runWithWorkspace(context),
-        maxParallel: Number(process.env.ORCHESTRATION_MAX_PARALLEL || 3),
+        maxParallel: Number(process.env.ORCHESTRATION_MAX_PARALLEL || 2),
         timeoutMs: Number(process.env.ORCHESTRATION_TIMEOUT_MS || 30000),
         maxRetries: Number(process.env.ORCHESTRATION_MAX_RETRIES || 1),
         ...this.schedulerOptions
@@ -155,5 +159,11 @@ export class OrchestrationService {
     await this.processes.get(jobId);
     try { await this.onStatusChange(await this.store.get(jobId)); } catch {}
     return this.store.get(jobId);
+  }
+
+  async cancelSubtask(jobId, subtaskId) {
+    const scheduler = this.schedulers.get(jobId);
+    if (!scheduler) throw new Error("job is not running");
+    return scheduler.cancelSubtask(jobId, subtaskId);
   }
 }

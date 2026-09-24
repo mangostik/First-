@@ -37,18 +37,33 @@ export function createMockAgentAdapter(options = {}) {
 export function createRealAgentAdapter({ review = runAgentReview } = {}) {
   return {
     mode: "real",
-    async run({ subtask, signal }) {
+    async run({ subtask, signal, workspace }) {
       if (signal?.aborted) throw new Error("cancelled");
+      const assignedWorkspace = workspace || subtask.workspace || null;
+      const workspacePath = assignedWorkspace?.workspace_path || "";
+      const workspaceContext = workspacePath
+        ? `\nWork only inside this assigned workspace: ${workspacePath}\nBranch: ${assignedWorkspace.branch_name}\nBase ref: ${assignedWorkspace.base_ref}`
+        : "";
       const result = await review(
-        { task: subtask.instructions },
-        { signal }
+        { task: `${subtask.instructions}${workspaceContext}` },
+        {
+          signal,
+          env: {
+            ...process.env,
+            ...(workspacePath ? {
+              ORCHESTRATION_WORKSPACE_PATH: workspacePath,
+              ORCHESTRATION_BRANCH_NAME: assignedWorkspace.branch_name,
+              ORCHESTRATION_BASE_REF: assignedWorkspace.base_ref
+            } : {})
+          }
+        }
       );
       const blocked = result.final_status === "BLOCKED" || result.decision?.status === "blocked";
       return {
         status: blocked ? "failed" : "completed",
         summary: result.decision?.status || result.final_status || "real review completed",
         changed_files: [],
-        tests: [],
+        tests: [`${subtask.role} real runner review loop completed`],
         warnings: [
           ...(result.decision?.critical_issues || []),
           ...(result.decision?.recommended_changes || [])

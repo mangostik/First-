@@ -39,6 +39,9 @@
 - [x] Подключение существующего Claude/OpenAI review loop как real runner.
 - [x] Таймаут Claude/OpenAI review loop увеличен до 15 минут (`900000` мс) в локальном default и CI-конфигурации.
 - [x] Deterministic mock runner для тестов.
+- [x] Реальный параллельный запуск двух независимых agent tasks через текущий scheduler с default `concurrency=2`.
+- [x] Real runner получает отдельный workspace descriptor каждой подзадачи; автоматический merge отсутствует.
+- [x] Opt-in real-runner smoke test добавлен и отключён по умолчанию.
 - [x] Integration lifecycle tests: `create → planning → running → completed/failed`.
 - [x] Worktree/branch isolation для изменяющих код агентов.
 - [x] Защита прямых изменений в `main` policy-тестом.
@@ -77,4 +80,4 @@
 
 ## Текущий этап
 
-Этап Integrator, обязательный project test gate и job-level Reviewer завершён. Lifecycle: `subtasks completed → integrating → project tests → reviewing → completed/failed`; test evidence сохраняется в job result, а Reviewer отклоняет job без успешных тестов. Добавлен CI workflow для установки зависимостей и запуска MCP contract, orchestration, test-runner и legacy тестов; timeout review loop установлен в 15 минут. Следующий этап после зелёного CI — реальный параллельный запуск двух независимых agent tasks с `concurrency=2` без автоматического merge.
+Этап реального параллельного запуска двух независимых agent tasks завершён на service/core уровне: scheduler использует default `concurrency=2`, передаёт отдельные workspaces real adapter, сохраняет результаты и выполняет Integrator, project test gate и job-level Reviewer без merge. Unit/integration проверки real adapter используют injected review и не вызывают API; smoke test opt-in. CI workflow запускает MCP contract, orchestration, test-runner, smoke и legacy проверки, но зелёный CI run ещё не подтверждён из локальной среды. Следующий этап — дождаться CI результата; затем можно расширять role templates/observability/cost limits.

@@ -160,15 +160,22 @@ test("runner adapters support mock and injected real implementations", async () 
   assert.throws(() => getAgentRunnerMode({ ORCHESTRATION_AGENT_MODE: "other" }), /Invalid/);
 
   let receivedTask = "";
+  let receivedOptions;
   const real = createRealAgentAdapter({
-    review: async input => {
+    review: async (input, options) => {
       receivedTask = input.task;
+      receivedOptions = options;
       return { final_status: "CONSENSUS", decision: { status: "agree", critical_issues: [], recommended_changes: [] } };
     }
   });
-  const result = await real.run({ subtask: { role: "backend", instructions: "review this API" } });
+  const result = await real.run({
+    subtask: { role: "backend", instructions: "review this API" },
+    workspace: { workspace_path: "C:\\assigned\\backend", branch_name: "orchestrator/job/backend", base_ref: "stage4-mcp" }
+  });
   assert.equal(real.mode, "real");
-  assert.equal(receivedTask, "review this API");
+  assert.match(receivedTask, /review this API/);
+  assert.match(receivedTask, /C:\\assigned\\backend/);
+  assert.equal(receivedOptions.env.ORCHESTRATION_WORKSPACE_PATH, "C:\\assigned\\backend");
   assert.equal(result.status, "completed");
 });
 
@@ -180,14 +187,47 @@ test("scheduler starts independent work in parallel and respects dependencies", 
     job.subtasks = planTask("Add an API function and tests").subtasks;
     await store.create(job);
     const started = [];
+    let active = 0;
+    let maxActive = 0;
     const runner = async ({ subtask }) => {
       started.push(subtask.id);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
       await new Promise(resolve => setTimeout(resolve, 20));
+      active -= 1;
       return { status: "completed", summary: "ok", changed_files: [], tests: [], warnings: [], error: null };
     };
-    const result = await new DependencyScheduler({ store, runner, maxParallel: 3, timeoutMs: 100, maxRetries: 0 }).run(job.job_id);
+    const result = await new DependencyScheduler({ store, runner, maxParallel: 2, timeoutMs: 100, maxRetries: 0 }).run(job.job_id);
     assert.equal(result.subtasks.every(item => item.status === "completed"), true);
     assert.deepEqual(started, ["backend-1", "qa-1", "reviewer-1"]);
+    assert.equal(maxActive, 2);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("scheduler can cancel one active subtask while another independent task completes", async () => {
+  const { root, store } = await fixture();
+  try {
+    const plan = planTask("Add an API function and tests");
+    const job = createJob("cancel one task");
+    job.status = "running";
+    job.subtasks = plan.subtasks.slice(0, 2);
+    await store.create(job);
+    const runner = async ({ subtask, signal }) => {
+      if (subtask.id === "backend-1") {
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, 200);
+          signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("cancelled")); }, { once: true });
+        });
+      }
+      return { status: "completed", summary: subtask.id, changed_files: [], tests: [], warnings: [], error: null };
+    };
+    const scheduler = new DependencyScheduler({ store, runner, maxParallel: 2, timeoutMs: 500, maxRetries: 0 });
+    const running = scheduler.run(job.job_id);
+    await new Promise(resolve => setTimeout(resolve, 15));
+    const cancelled = await scheduler.cancelSubtask(job.job_id, "backend-1");
+    const result = await running;
+    assert.equal(cancelled.subtasks.find(item => item.id === "backend-1").status, "cancelled");
+    assert.equal(result.subtasks.find(item => item.id === "qa-1").status, "completed");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -277,6 +317,50 @@ test("service completes the non-blocking MVP job with a final result", async () 
     assert.equal(finalResult.review.final_decision, "approved");
     assert.equal(finalResult.test_evidence.status, "passed");
     assert.deepEqual(history, ["planning", "running", "integrating", "reviewing", "completed"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("service runs backend and QA through the real adapter in parallel and preserves workspaces", async () => {
+  const { root, store, workspaceManager } = await fixture();
+  try {
+    const activeWorkspaces = new Set();
+    let maxActive = 0;
+    let active = 0;
+    const runner = createRealAgentAdapter({
+      review: async input => {
+        const match = input.task.match(/assigned workspace: ([^\n]+)/);
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        if (match) activeWorkspaces.add(match[1]);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        active -= 1;
+        return { final_status: "CONSENSUS", decision: { status: "agree", ready_to_merge: true, critical_issues: [], recommended_changes: [] } };
+      }
+    });
+    const service = new OrchestrationService({
+      store,
+      workspaceManager,
+      runner,
+      schedulerOptions: { maxParallel: 2, timeoutMs: 500 },
+      testRunner: createMockTestRunner()
+    });
+    const created = await service.createJob("Add an API function and tests");
+    const immediate = await service.getStatus(created.job_id);
+    assert.equal(created.status, "queued");
+    assert.ok(["queued", "planning", "running"].includes(immediate.status));
+    let job;
+    for (let i = 0; i < 600; i += 1) {
+      job = await service.getStatus(created.job_id);
+      if (job.status === "completed") break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(job.status, "completed");
+    assert.equal(maxActive, 2);
+    assert.equal(activeWorkspaces.size, 3);
+    assert.equal(job.subtasks.filter(item => item.status === "completed").length, 3);
+    assert.equal(job.test_evidence.status, "passed");
+    assert.equal(job.result.aggregate.workspaces.length, 3);
+    assert.equal(job.result.review.final_decision, "approved");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

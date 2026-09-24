@@ -47,6 +47,9 @@ jobs:
       - name: Run test-runner tests
         run: node --test test/test-runner.test.js
 
+      - name: Check opt-in real-runner smoke test
+        run: node --test test/real-runner.smoke.test.js
+
       - name: Run legacy tests
         run: node --test test/github.test.js test/mcp-runner.test.js test/openai.test.js test/protocol.test.js
 

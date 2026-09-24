@@ -36,6 +36,22 @@ export class DependencyScheduler {
     });
   }
 
+  async cancelSubtask(jobId, subtaskId) {
+    const key = `${jobId}:${subtaskId}`;
+    const entry = this.active.get(key);
+    if (entry) entry.controller.abort();
+    if (entry) await Promise.allSettled([entry.promise]);
+    return this.store.update(jobId, job => {
+      const subtask = job.subtasks.find(item => item.id === subtaskId);
+      if (!subtask || isTerminal(subtask.status)) return job;
+      subtask.status = "cancelled";
+      subtask.error = "cancelled";
+      subtask.finished_at = new Date().toISOString();
+      if (subtask.workspace) subtask.workspace.state = "cancelled";
+      return job;
+    });
+  }
+
   async run(jobId) {
     while (true) {
       let job = await this.store.get(jobId);
