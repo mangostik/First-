@@ -7,6 +7,8 @@ import { runAgentReview } from "./mcp-runner.js";
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "0.0.0.0";
 const accessToken = process.env.MCP_ACCESS_TOKEN || "";
+const pathToken = process.env.MCP_PATH_TOKEN || "";
+const mcpPath = pathToken ? "/mcp/" + pathToken : "/mcp";
 
 function isAuthorized(req) {
   if (!accessToken) return true;
@@ -75,7 +77,14 @@ function createAgentServer() {
 }
 
 createServer(async (req, res) => {
-  if (req.url !== "/mcp") {
+  if (req.url === "/health") {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ ok: true, service: "fishcrm-agent-orchestrator" }));
+    return;
+  }
+
+  if (req.url !== mcpPath) {
     res.statusCode = 404;
     res.end("Not found");
     return;
@@ -106,5 +115,5 @@ createServer(async (req, res) => {
     await server.close().catch(() => {});
   }
 }).listen(port, host, () => {
-  console.log("MCP server listening on http://" + host + ":" + port + "/mcp");
+  console.log("MCP server listening on http://" + host + ":" + port + mcpPath);
 });
