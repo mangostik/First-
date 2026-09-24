@@ -36,7 +36,6 @@ jobs:
         run: npm test
 
       - name: Resolve request
-        id: request
         shell: bash
         run: |
           set -euo pipefail
@@ -45,6 +44,7 @@ jobs:
             echo "No agent request found in commit"
             exit 1
           fi
+          export REQUEST_FILE
           node --input-type=module <<'NODE'
           import fs from "node:fs";
           const file = process.env.REQUEST_FILE;
@@ -68,8 +68,6 @@ jobs:
             }
           }
           NODE
-        env:
-          REQUEST_FILE: ${{ steps.request.outputs.file || '' }}
 
       - name: Run Claude + OpenAI orchestrator
         working-directory: agent-orchestrator
