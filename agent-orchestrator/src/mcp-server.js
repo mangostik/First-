@@ -10,6 +10,7 @@ const accessToken = process.env.MCP_ACCESS_TOKEN || "";
 const pathToken = process.env.MCP_PATH_TOKEN || "";
 const domainChallengeToken = process.env.OPENAI_APPS_CHALLENGE_TOKEN || "";
 const mcpPath = pathToken ? "/mcp/" + pathToken : "/mcp";
+// Stage 4: keep tool metadata explicit for ChatGPT Plugin Creator validation.
 
 function isAuthorized(req) {
   if (!accessToken) return true;
