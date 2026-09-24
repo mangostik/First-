@@ -8,6 +8,7 @@ const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "0.0.0.0";
 const accessToken = process.env.MCP_ACCESS_TOKEN || "";
 const pathToken = process.env.MCP_PATH_TOKEN || "";
+const domainChallengeToken = process.env.OPENAI_APPS_CHALLENGE_TOKEN || "";
 const mcpPath = pathToken ? "/mcp/" + pathToken : "/mcp";
 
 function isAuthorized(req) {
@@ -81,6 +82,18 @@ createServer(async (req, res) => {
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ ok: true, service: "fishcrm-agent-orchestrator" }));
+    return;
+  }
+
+  if (req.url === "/.well-known/openai-apps-challenge") {
+    if (!domainChallengeToken) {
+      res.statusCode = 404;
+      res.end("Not found");
+      return;
+    }
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end(domainChallengeToken);
     return;
   }
 
