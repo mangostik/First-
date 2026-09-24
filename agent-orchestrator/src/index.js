@@ -286,7 +286,7 @@ function aggregateChunkResults(results, synthesis = null) {
   return {
     final_status: finalStatus,
     rounds: results.reduce((sum, item) => sum + (item.rounds || 0), 0),
-    decision: synthesis || {
+    decision: {
       status: finalStatus === "CONSENSUS" ? "agree" : (hasBlocked ? "blocked" : "needs_changes"),
       critical_issues: criticalIssues,
       recommended_changes: recommendedChanges,
