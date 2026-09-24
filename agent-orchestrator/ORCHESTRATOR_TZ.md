@@ -65,9 +65,9 @@
 - [x] `get_job_status`.
 - [x] `get_job_result`.
 - [x] `cancel_job`.
-- [partial] Неблокирующая работа `create_orchestration_job` доказана на service/core уровне; MCP runtime-проверка заблокирована отсутствующими зависимостями.
+- [partial] Неблокирующая работа `create_orchestration_job` доказана на service/core уровне; CI workflow запускает MCP runtime/contract проверки, но успешный CI run ещё не подтверждён.
 - [x] Unit-тесты статусов, store, Planner, scheduler, retry, timeout, cancel и зависимостей.
-- [blocked] Полностью исполняемые MCP contract tests: `npm install` требует пакет из registry, но среда работает с `npm cache=only-if-cached`, пакета в cache нет.
+- [partial] MCP contract tests: локальный запуск заблокирован отсутствующим `@modelcontextprotocol/server` и `cache=only-if-cached`; добавлен `.github/workflows/agent-orchestrator-ci.yml`, который устанавливает зависимости через сеть CI и запускает contract tests.
 
 ### Deployment
 
@@ -76,4 +76,4 @@
 
 ## Текущий этап
 
-Этап Integrator, обязательный project test gate и job-level Reviewer завершён. Lifecycle: `subtasks completed → integrating → project tests → reviewing → completed/failed`; test evidence сохраняется в job result, а Reviewer отклоняет job без успешных тестов. Следующий безопасный этап — полные role templates/наблюдаемость и cost/API limits; MCP contract/runtime verification остаётся заблокированной отдельной средой без зависимостей.
+Этап Integrator, обязательный project test gate и job-level Reviewer завершён. Lifecycle: `subtasks completed → integrating → project tests → reviewing → completed/failed`; test evidence сохраняется в job result, а Reviewer отклоняет job без успешных тестов. Добавлен CI workflow для установки зависимостей и запуска MCP contract, orchestration, test-runner и legacy тестов; требуется дождаться фактического CI run. Следующий этап после зелёного CI — реальный параллельный запуск двух независимых agent tasks с `concurrency=2` без автоматического merge.
