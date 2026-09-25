@@ -8,6 +8,7 @@ import {
   validatePositiveInteger
 } from "./github.js";
 import { isConsensus, RESPONSE_SCHEMA_HINT } from "./protocol.js";
+import { failureResult } from "./review-result.js";
 
 const env = process.env;
 const config = {
@@ -22,7 +23,11 @@ const config = {
   githubPrNumber: env.GITHUB_PR_NUMBER ? Number(env.GITHUB_PR_NUMBER) : null,
   maxRounds: Number(env.MAX_ROUNDS || 3),
   maxOutputTokens: Number(env.MAX_OUTPUT_TOKENS || 1800),
-  timeoutMs: Number(env.REQUEST_TIMEOUT_MS || 900000),
+  requestTimeoutMs: Number(env.REQUEST_TIMEOUT_MS || 120000),
+  claudeTimeoutMs: Number(env.CLAUDE_REQUEST_TIMEOUT_MS || env.REQUEST_TIMEOUT_MS || 120000),
+  openaiTimeoutMs: Number(env.OPENAI_REQUEST_TIMEOUT_MS || env.REQUEST_TIMEOUT_MS || 120000),
+  providerMaxRetries: Number(env.PROVIDER_MAX_RETRIES || 1),
+  structuredMaxRetries: Number(env.STRUCTURED_MAX_RETRIES || 1),
   maxDiffChars: Number(env.MAX_DIFF_CHARS || 20000),
   maxDiffTotalBytes: Number(env.MAX_DIFF_TOTAL_BYTES || 250000)
 };
@@ -127,7 +132,7 @@ async function loadOptionalDiffChunks() {
       repo: config.githubRepo,
       prNumber: config.githubPrNumber,
       token: config.githubToken,
-      timeoutMs: config.timeoutMs,
+      timeoutMs: config.requestTimeoutMs,
       maxBytes: config.maxDiffTotalBytes
     });
   } else {
@@ -143,7 +148,7 @@ async function loadOptionalDiffChunks() {
       base: github.base,
       head: github.head,
       token: config.githubToken,
-      timeoutMs: config.timeoutMs,
+      timeoutMs: config.requestTimeoutMs,
       maxBytes: config.maxDiffTotalBytes
     });
   }
@@ -161,7 +166,8 @@ async function reviewChunk({ task, diff, chunkIndex, chunkCount }) {
       model: config.anthropicModel,
       prompt: claudePrompt({ task, diff, chunkIndex, chunkCount, round, openaiReview: lastOpenAI }),
       maxOutputTokens: config.maxOutputTokens,
-      timeoutMs: config.timeoutMs
+      timeoutMs: config.claudeTimeoutMs,
+      maxRetries: config.providerMaxRetries
     });
 
     const openai = await askOpenAI({
@@ -169,7 +175,9 @@ async function reviewChunk({ task, diff, chunkIndex, chunkCount }) {
       model: config.openaiModel,
       prompt: openaiPrompt({ task, diff, chunkIndex, chunkCount, round, claudeResponse: claude }),
       maxOutputTokens: config.maxOutputTokens,
-      timeoutMs: config.timeoutMs
+      timeoutMs: config.openaiTimeoutMs,
+      maxRetries: config.providerMaxRetries,
+      maxStructuredRetries: config.structuredMaxRetries
     });
 
     transcript.push({ round, claude, openai });
@@ -243,7 +251,9 @@ async function synthesizeChunkResults({ task, results }) {
     model: config.openaiModel,
     prompt,
     maxOutputTokens: config.maxOutputTokens,
-    timeoutMs: config.timeoutMs
+    timeoutMs: config.openaiTimeoutMs,
+    maxRetries: config.providerMaxRetries,
+    maxStructuredRetries: config.structuredMaxRetries
   });
 }
 
@@ -360,5 +370,6 @@ async function main() {
 
 main().catch(error => {
   console.error(error && error.stack ? error.stack : String(error));
+  process.stdout.write(JSON.stringify(failureResult(error), null, 2) + "\n");
   process.exitCode = 1;
 });

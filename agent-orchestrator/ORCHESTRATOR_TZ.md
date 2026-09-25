@@ -38,7 +38,9 @@
 - [x] Adapter-интерфейс agent runner.
 - [x] Конфигурация mock/real runner.
 - [x] Подключение существующего Claude/OpenAI review loop как real runner.
-- [x] Таймаут Claude/OpenAI review loop увеличен до 15 минут (`900000` мс) в локальном default и CI-конфигурации.
+- [x] Per-request timeout для Claude/OpenAI: по `120000` мс по умолчанию; общий GitHub timeout не увеличивается.
+- [x] Ограниченные provider retries для 429/5xx и structured-output retries с явной причиной остановки.
+- [x] AbortSignal/cancellation для provider requests и гарантированный structured failure JSON при timeout/error.
 - [x] Deterministic mock runner для тестов.
 - [x] Реальный параллельный запуск двух независимых agent tasks через текущий scheduler с default `concurrency=2`.
 - [x] Real runner получает отдельный workspace descriptor каждой подзадачи; автоматический merge отсутствует.

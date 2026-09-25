@@ -34,7 +34,11 @@ Optional controls:
 ```text
 MAX_ROUNDS=3
 MAX_OUTPUT_TOKENS=1800
-REQUEST_TIMEOUT_MS=900000
+REQUEST_TIMEOUT_MS=120000
+CLAUDE_REQUEST_TIMEOUT_MS=120000
+OPENAI_REQUEST_TIMEOUT_MS=120000
+PROVIDER_MAX_RETRIES=1
+STRUCTURED_MAX_RETRIES=1
 MAX_DIFF_CHARS=20000
 MAX_DIFF_TOTAL_BYTES=250000
 GITHUB_TOKEN=...
@@ -100,6 +104,8 @@ ORCHESTRATION_MAX_RETRIES=1
 ORCHESTRATION_TIMEOUT_MS=30000
 ORCHESTRATION_JOB_TIMEOUT_MS=300000
 ```
+
+Provider requests have independent 120-second defaults. `PROVIDER_MAX_RETRIES=1` bounds retryable 429/5xx responses, while `STRUCTURED_MAX_RETRIES=1` bounds invalid or incomplete structured-output retries. Timeouts and cancellations produce a valid structured failure JSON result, which is uploaded and can be summarized without a secondary JSON parse failure.
 
 Set `MCP_PATH_TOKEN` and `ORCHESTRATION_TRACKER_TOKEN` only as deployment secrets; never commit their values. The production smoke test checks `/health`, authenticated `/tracker`, MCP initialization, `tools/list`, and `orchestrator_status` without calling external model providers.
 

@@ -45,7 +45,11 @@ jobs:
           ANTHROPIC_MODEL: claude-sonnet-4-5
           MAX_ROUNDS: "3"
           MAX_OUTPUT_TOKENS: "1600"
-          REQUEST_TIMEOUT_MS: "900000"
+          REQUEST_TIMEOUT_MS: "120000"
+          CLAUDE_REQUEST_TIMEOUT_MS: "120000"
+          OPENAI_REQUEST_TIMEOUT_MS: "120000"
+          PROVIDER_MAX_RETRIES: "1"
+          STRUCTURED_MAX_RETRIES: "1"
           MAX_DIFF_CHARS: "20000"
           MAX_DIFF_TOTAL_BYTES: "250000"
           GITHUB_TOKEN: ${{ github.token }}
@@ -56,16 +60,18 @@ jobs:
         run: |
           test -n "$OPENAI_API_KEY" || { echo "Missing repository secret OPENAI_API_KEY"; exit 1; }
           test -n "$ANTHROPIC_API_KEY" || { echo "Missing repository secret ANTHROPIC_API_KEY"; exit 1; }
+          set -o pipefail
           node src/index.js "Review this GitHub diff. Find only concrete high-impact problems; do not nitpick style." | tee agent-review.json
 
       - name: Upload review result
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-review
           path: agent-orchestrator/agent-review.json
 
       - name: Post review summary to PR
-        if: github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
