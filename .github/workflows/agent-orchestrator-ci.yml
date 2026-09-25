@@ -62,6 +62,10 @@ jobs:
         run: node --test test/orchestration.test.js
         timeout-minutes: 3
 
+      - name: Run role registry and Planner routing tests
+        run: node --test test/role-routing.test.js
+        timeout-minutes: 3
+
       - name: Run test-runner tests
         run: node --test test/test-runner.test.js
         timeout-minutes: 2

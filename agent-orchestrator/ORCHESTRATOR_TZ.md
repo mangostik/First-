@@ -15,11 +15,12 @@
 
 ### Архитектура и Planner
 
-- [x] Реестр MVP-ролей: Backend, QA, Reviewer; расширяемый реестр ролей.
+- [x] Реестр ролей: Backend, QA, Frontend, Database, Security, Documentation, Reviewer; расширяемые role templates.
 - [x] Planner с формированием структурированного плана.
 - [x] Для задачи API-функции и тестов создаются Backend, QA и зависимый Reviewer.
-- [ ] Полный реестр ролей из ТЗ: Planner, Backend, Frontend, Database, QA, Security, Documentation, Reviewer, Integrator.
-- [ ] Шаблоны всех типов FishCRM-задач.
+- [partial] Полный реестр ролей из ТЗ: Planner, Backend, Frontend, Database, QA, Security, Documentation, Reviewer, Integrator; реализованы агентские role templates, Planner/Integrator остаются сервисными компонентами.
+- [x] Шаблоны ролей Backend, Frontend, Database, QA, Security, Documentation и Reviewer с routing metadata и тестовыми критериями.
+- [x] Planner routing по содержанию задачи, safe fallback для неизвестной задачи и сохранение dependencies.
 
 ### Параллельное выполнение
 
@@ -88,4 +89,4 @@
 
 ## Текущий этап
 
-Этап observability и limits реализован и подтверждён зелёным CI run #8 (`7629c09`). Текущий этап — минимальный read-only web tracker поверх существующего job state/event model: API, SSE и inline HTML panel добавлены без новых зависимостей, ролей, команд или write operations. Ограниченный архитектурный review tracker был запрошен после реализации, но заблокирован исчерпанной квотой OpenAI в существующем review loop; это не выдаётся за успешный review. Production merge/deployment не выполнялись.
+Этап observability/limits и read-only web tracker реализованы и подтверждены зелёными CI runs #12/#13. Текущий этап — расширение role registry и Planner routing: добавлены templates для Frontend, Database, Security и Documentation, routing шести рабочих ролей, safe fallback, независимый параллельный запуск и reviewer dependency. Архитектурный review не является блокером из-за исчерпанной OpenAI quota в существующем loop. Production merge/deployment не выполнялись.

@@ -13,6 +13,7 @@ Automated Claude ↔ OpenAI engineering review loop with GitHub diff support and
 
 - Claude — implementation engineer.
 - OpenAI — reviewer, architect, and final arbiter.
+- The orchestration role registry includes `backend`, `qa`, `frontend`, `database`, `security`, `documentation`, and `reviewer`. Each role has an explicit purpose, allowed task types, input context, result format, constraints, completion criteria, and required tests.
 - Consensus requires both agents to agree, no critical issues, and `ready_to_merge=true`.
 - Objective blockers are preserved and must be supported by evidence.
 - Multi-chunk diffs receive a final cross-chunk OpenAI synthesis before whole-change consensus can be emitted.
@@ -105,7 +106,7 @@ The MVP adds a non-blocking mock orchestration flow for the task shape “add an
 - `get_job_result` — reads the final result when available;
 - `cancel_job` — cancels a queued or running job.
 
-The Planner creates independent `backend` and `qa` subtasks, followed by a dependent `reviewer` subtask. The scheduler runs at most two tasks concurrently by default, waits for dependencies, applies a bounded retry, enforces a timeout, and persists each job as an atomic JSON file under `JOB_STORAGE_DIR`. Mock mode remains the safe default; real mode delegates each subtask to the existing Claude/OpenAI review loop.
+The Planner routes task content to `backend`, `qa`, `frontend`, `database`, `security`, and `documentation` role templates. Routed role subtasks are independent unless the plan explicitly adds dependencies; a dependent `reviewer` subtask is added after all routed roles. Unknown task text receives a safe backend clarification fallback instead of speculative multi-role work. The scheduler runs at most two tasks concurrently by default, waits for dependencies, applies a bounded retry, enforces a timeout, and persists each job as an atomic JSON file under `JOB_STORAGE_DIR`. Mock mode remains the safe default; real mode delegates each subtask to the existing Claude/OpenAI review loop.
 
 Supported job and subtask statuses are:
 
