@@ -73,6 +73,10 @@ npm install
 npm run start:mcp
 ```
 
+`src/mcp-server.js` is import-safe: importing its factories and tool registration
+does not open a port. The HTTP listener starts only through `npm run start:mcp`,
+which preserves `/health`, MCP initialization, and the registered tool set.
+
 Default local endpoint:
 
 ```text

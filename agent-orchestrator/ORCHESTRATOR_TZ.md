@@ -75,6 +75,7 @@
 - [x] Неблокирующая работа `create_orchestration_job` доказана на service/core уровне; MCP contract tests проходят в CI.
 - [x] Unit-тесты статусов, store, Planner, scheduler, retry, timeout, cancel и зависимостей.
 - [x] MCP contract tests проходят в CI; локальная среда по-прежнему ограничена `cache=only-if-cached` и Windows `spawn EPERM` для Node workers.
+- [x] MCP server import-safe: HTTP listener создаётся и запускается только через `npm run start:mcp`; `/health`, MCP initialize и список tools сохранены.
 
 ### Read-only observability tracker
 

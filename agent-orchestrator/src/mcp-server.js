@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/server";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import * as z from "zod";
@@ -71,7 +73,7 @@ export function registerOrchestrationTools(server, service = orchestrationServic
   }
 }
 
-export function createAgentServer() {
+export function createAgentServer(service = orchestrationService) {
   const server = new McpServer(
     { name: "fishcrm-agent-orchestrator", version: "0.1.0" },
     {
@@ -139,63 +141,73 @@ export function createAgentServer() {
     })
   );
 
-  registerOrchestrationTools(server);
+  registerOrchestrationTools(server, service);
 
   return server;
 }
 
-createServer(async (req, res) => {
-  if (req.url === "/health") {
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ ok: true, service: "fishcrm-agent-orchestrator" }));
-    return;
-  }
+export function createMcpHttpServer({ service = orchestrationService, trackerInstance = tracker } = {}) {
+  return createServer(async (req, res) => {
+    if (req.url === "/health") {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: true, service: "fishcrm-agent-orchestrator" }));
+      return;
+    }
 
-  if (req.url === "/.well-known/openai-apps-challenge") {
-    if (!domainChallengeToken) {
+    if (req.url === "/.well-known/openai-apps-challenge") {
+      if (!domainChallengeToken) {
+        res.statusCode = 404;
+        res.end("Not found");
+        return;
+      }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end(domainChallengeToken);
+      return;
+    }
+
+    if (await trackerInstance.handle(req, res)) return;
+
+    if (req.url !== mcpPath) {
       res.statusCode = 404;
       res.end("Not found");
       return;
     }
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end(domainChallengeToken);
-    return;
-  }
 
-  if (await tracker.handle(req, res)) return;
+    if (!isAuthorized(req)) {
+      res.statusCode = 401;
+      res.setHeader("WWW-Authenticate", "Bearer");
+      res.end("Unauthorized");
+      return;
+    }
 
-  if (req.url !== mcpPath) {
-    res.statusCode = 404;
-    res.end("Not found");
-    return;
-  }
+    const server = createAgentServer(service);
+    const transport = new NodeStreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true
+    });
 
-  if (!isAuthorized(req)) {
-    res.statusCode = 401;
-    res.setHeader("WWW-Authenticate", "Bearer");
-    res.end("Unauthorized");
-    return;
-  }
-
-  const server = createAgentServer();
-  const transport = new NodeStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res);
+    } catch (error) {
+      if (!res.headersSent) res.statusCode = 500;
+      if (!res.writableEnded) res.end("MCP server error");
+      console.error(error);
+    } finally {
+      await transport.close().catch(() => {});
+      await server.close().catch(() => {});
+    }
   });
+}
 
-  try {
-    await server.connect(transport);
-    await transport.handleRequest(req, res);
-  } catch (error) {
-    if (!res.headersSent) res.statusCode = 500;
-    if (!res.writableEnded) res.end("MCP server error");
-    console.error(error);
-  } finally {
-    await transport.close().catch(() => {});
-    await server.close().catch(() => {});
-  }
-}).listen(port, host, () => {
-  console.log("MCP server listening on http://" + host + ":" + port + (pathToken ? "/mcp/<private>" : "/mcp"));
-});
+export function startMcpServer({ port: listenPort = port, host: listenHost = host } = {}) {
+  const httpServer = createMcpHttpServer();
+  return httpServer.listen(listenPort, listenHost, () => {
+    console.log("MCP server listening on http://" + listenHost + ":" + listenPort + (pathToken ? "/mcp/<private>" : "/mcp"));
+  });
+}
+
+const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (isMainModule) startMcpServer();
