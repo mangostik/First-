@@ -112,10 +112,11 @@ export class DependencyScheduler {
       }
       const remainingMs = Math.max(1, this.jobTimeoutMs - (Date.now() - started));
       if (this.active.size > 0) {
+        let jobTimer;
         const winner = await Promise.race([
           ...[...this.active.values()].map(entry => entry.promise),
-          new Promise(resolve => setTimeout(() => resolve("__JOB_TIMEOUT__"), remainingMs))
-        ]);
+          new Promise(resolve => { jobTimer = setTimeout(() => resolve("__JOB_TIMEOUT__"), remainingMs); })
+        ]).finally(() => clearTimeout(jobTimer));
         if (winner === "__JOB_TIMEOUT__") return this.failForLimit(jobId, "job_timeout", { limit_ms: this.jobTimeoutMs });
       } else await sleep(Math.min(5, remainingMs));
     }
@@ -159,10 +160,11 @@ export class DependencyScheduler {
         return job;
       });
       try {
+        let subtaskTimer;
         const result = await Promise.race([
           this.runner({ job: current, subtask, attempt, signal: controller.signal }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), this.timeoutMs))
-        ]);
+          new Promise((_, reject) => { subtaskTimer = setTimeout(() => reject(new Error("timeout")), this.timeoutMs); })
+        ]).finally(() => clearTimeout(subtaskTimer));
         await this.store.update(jobId, job => {
           const item = job.subtasks.find(value => value.id === subtaskId);
           if (item) {
