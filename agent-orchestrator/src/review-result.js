@@ -1,4 +1,4 @@
-export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0, events = error?.reviewEvents || [] } = {}) {
+export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0, events = error?.reviewEvents || [], partial = error?.partialResult || null } = {}) {
   const provider = error?.provider || (error?.message || "").match(/^(Claude|OpenAI)/)?.[1] || null;
   const code = error?.code || "REVIEW_ERROR";
   const status = ["PROVIDER_TIMEOUT", "REVIEW_LOOP_TIMEOUT"].includes(code)
@@ -10,8 +10,10 @@ export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0, even
     reason,
     error: { code, provider, message: reason },
     rounds: 0,
-    chunks_reviewed: chunksReviewed,
-    chunks_total: chunksTotal,
+    chunks_reviewed: partial?.mandatory_completed ?? chunksReviewed,
+    chunks_total: partial?.chunks_total ?? chunksTotal,
+    coverage_complete: partial?.coverage_complete === true,
+    partial_result: partial,
     decision: {
       status: "blocked",
       critical_issues: [`Review did not complete: ${reason}`],
@@ -20,6 +22,6 @@ export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0, even
       evidence: [`provider=${provider || "unknown"}`, `error_code=${code}`]
     },
     events,
-    transcript: []
+    transcript: partial?.chunkResults || []
   };
 }

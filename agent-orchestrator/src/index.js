@@ -30,6 +30,7 @@ const config = {
   providerMaxRetries: Number(env.PROVIDER_MAX_RETRIES || 1),
   structuredMaxRetries: Number(env.STRUCTURED_MAX_RETRIES || 1),
   reviewLoopTimeoutMs: Number(env.REVIEW_LOOP_TIMEOUT_MS || 600000),
+  reviewLoopGuardMs: Number(env.REVIEW_LOOP_GUARD_MS || 1000),
   maxDiffChars: Number(env.MAX_DIFF_CHARS || 20000),
   maxDiffTotalBytes: Number(env.MAX_DIFF_TOTAL_BYTES || 250000)
 };
@@ -326,6 +327,6 @@ async function main() {
 
 main().catch(error => {
   console.error(error && error.stack ? error.stack : String(error));
-  process.stdout.write(JSON.stringify(failureResult(error), null, 2) + "\n");
+  process.stdout.write(JSON.stringify(failureResult(error, { partial: error.partialResult }), null, 2) + "\n");
   process.exitCode = 1;
 });

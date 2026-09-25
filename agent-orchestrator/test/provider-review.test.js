@@ -118,7 +118,55 @@ test("review loop deadline aborts a hanging provider and emits structured events
     return true;
   });
   assert.ok(Date.now() - started < 500);
-  assert.deepEqual(events.map(event => event.type), ["provider_started", "review_loop_aborted"]);
+  assert.deepEqual(events.map(event => event.type), ["review_loop_aborted"]);
+  assert.match(events[0].reason, /insufficient time|timed out/);
+});
+
+function loopConfig(overrides = {}) {
+  return {
+    maxRounds: 3, maxOutputTokens: 100, claudeTimeoutMs: 100, openaiTimeoutMs: 100,
+    providerMaxRetries: 0, structuredMaxRetries: 0, reviewLoopTimeoutMs: 5000,
+    reviewLoopGuardMs: 0, anthropicApiKey: "test", anthropicModel: "claude",
+    openaiApiKey: "test", openaiModel: "openai", ...overrides
+  };
+}
+
+test("reviews every chunk once before following up only the problematic chunk", async () => {
+  const calls = [];
+  const clean = { ...agent };
+  const problem = { ...agent, status: "needs_changes", ready_to_merge: false, critical_issues: ["issue"] };
+  const followup = { ...agent };
+  const result = await runProviderReviewLoop({
+    task: "review", chunks: ["one", "two"], config: loopConfig(),
+    promptBuilders: { claude: ({ diff }) => diff, openai: ({ diff }) => diff },
+    synthesize: async () => null, isConsensus: (claude, openai) => claude === clean && openai === clean,
+    emit: () => {},
+    askClaudeFn: async ({ prompt }) => { calls.push(`claude:${prompt}`); return prompt === "one" ? problem : clean; },
+    askOpenAIFn: async ({ prompt }) => { calls.push(`openai:${prompt}`); return prompt === "one" ? problem : clean; }
+  });
+  assert.equal(result.coverageComplete, true);
+  assert.equal(result.chunkResults.length, 2);
+  assert.equal(result.chunkResults[0].rounds, 3);
+  assert.equal(result.chunkResults[1].rounds, 1);
+  assert.equal(result.chunkResults[0].transcript.length, 3);
+});
+
+test("insufficient deadline preserves partial results and does not start another provider call", async () => {
+  const events = [];
+  const calls = [];
+  await assert.rejects(() => runProviderReviewLoop({
+    task: "review", chunks: ["one", "two"], config: loopConfig({ reviewLoopTimeoutMs: 20, claudeTimeoutMs: 10, openaiTimeoutMs: 10 }),
+    promptBuilders: { claude: () => "claude", openai: () => "openai" }, synthesize: async () => null,
+    isConsensus: () => true, emit: event => events.push(event),
+    askClaudeFn: async () => { calls.push("claude"); return agent; },
+    askOpenAIFn: async () => { calls.push("openai"); return agent; }
+  }), error => {
+    assert.equal(error.code, "REVIEW_LOOP_TIMEOUT");
+    assert.equal(error.partialResult.coverage_complete, false);
+    return true;
+  });
+  assert.ok(calls.length < 4);
+  assert.ok(events.some(event => event.type === "review_loop_aborted"));
 });
 
 test("retryable Claude 503 and OpenAI 429 stop after the configured retry", async () => {

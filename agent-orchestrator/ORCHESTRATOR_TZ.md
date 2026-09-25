@@ -42,6 +42,7 @@
 - [x] Ограниченные provider retries для 429/5xx и structured-output retries с явной причиной остановки.
 - [x] AbortSignal/cancellation для provider requests и гарантированный structured failure JSON при timeout/error.
 - [x] Общий deadline provider review loop: `REVIEW_LOOP_TIMEOUT_MS=600000`; structured provider start/completion/timeout/error и loop-aborted events.
+- [x] Оптимизирован review loop: один обязательный раунд по всем chunks, follow-up только для проблемных chunks, guard перед новым provider call и partial result при неполном покрытии; `ready_to_merge=false` до полного покрытия.
 - [x] Deterministic mock runner для тестов.
 - [x] Реальный параллельный запуск двух независимых agent tasks через текущий scheduler с default `concurrency=2`.
 - [x] Real runner получает отдельный workspace descriptor каждой подзадачи; автоматический merge отсутствует.
@@ -96,4 +97,4 @@
 
 ## Текущий этап
 
-Этап observability/limits и read-only web tracker реализованы и подтверждены зелёными CI runs #12/#13. Этап расширения role registry и Planner routing завершён и подтверждён зелёными CI runs #14 (push) и #15 (pull request). Текущий этап — production hardening в отдельной ветке: lockfile, воспроизводимый Docker build, mock-only defaults и smoke checks подготовлены; merge/deployment не выполнялись. Зафиксировано, что worktree isolation/real runner пока не готовы для production Docker, job state хранится локально, а `ORCHESTRATION_TRACKER_TOKEN` не должен попадать в Git. Production deployment остаётся отдельным следующим этапом и требует явного подтверждения.
+Этап observability/limits и read-only web tracker реализованы и подтверждены зелёными CI runs #12/#13. Этап расширения role registry и Planner routing завершён и подтверждён зелёными CI runs #14 (push) и #15 (pull request). Production hardening подготовлен; merge/deployment не выполнялись. В текущей итерации оптимизирован provider review loop: обязательное покрытие всех chunks выполняется до дополнительных раундов, follow-up ограничен проблемными chunks, перед новым вызовом проверяется остаток deadline, а неполный результат сохраняется структурированно с `ready_to_merge=false`. Локальный полный тестовый прогон в Windows один раз проявил нестабильный timing существующего cancel-теста, повторный orchestration suite и provider suite прошли; CI является финальной проверкой. Production deployment остаётся отдельным этапом и требует явного подтверждения.

@@ -78,7 +78,7 @@ does not open a port. The HTTP listener starts only through `npm run start:mcp`,
 which preserves `/health`, MCP initialization, and the registered tool set.
 
 The Claude/OpenAI review loop uses 120-second per-request timeouts plus a
-600-second `REVIEW_LOOP_TIMEOUT_MS` deadline for the complete provider loop.
+600-second `REVIEW_LOOP_TIMEOUT_MS` deadline for the complete provider loop. The loop makes one mandatory Claude/OpenAI round for every diff chunk first, then revisits only chunks with unresolved findings. `REVIEW_LOOP_GUARD_MS` reserves time before starting another provider request; if the remaining deadline is too short, the loop stops and preserves the partial structured result with `ready_to_merge=false`.
 Structured `provider_started`, `provider_completed`, `provider_timeout`,
 `provider_error`, and `review_loop_aborted` events are emitted without secrets.
 
