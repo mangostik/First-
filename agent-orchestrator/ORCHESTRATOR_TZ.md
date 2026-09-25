@@ -89,4 +89,4 @@
 
 ## Текущий этап
 
-Этап observability/limits и read-only web tracker реализованы и подтверждены зелёными CI runs #12/#13. Текущий этап — расширение role registry и Planner routing: добавлены templates для Frontend, Database, Security и Documentation, routing шести рабочих ролей, safe fallback, независимый параллельный запуск и reviewer dependency. Архитектурный review не является блокером из-за исчерпанной OpenAI quota в существующем loop. Production merge/deployment не выполнялись.
+Этап observability/limits и read-only web tracker реализованы и подтверждены зелёными CI runs #12/#13. Этап расширения role registry и Planner routing завершён и подтверждён зелёными CI runs #14 (push) и #15 (pull request): добавлены templates для Frontend, Database, Security и Documentation, routing шести рабочих ролей, safe fallback, независимый параллельный запуск и reviewer dependency. Архитектурный review не является блокером из-за исчерпанной OpenAI quota в существующем loop. Production merge/deployment не выполнялись.
