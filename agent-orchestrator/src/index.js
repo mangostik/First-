@@ -22,7 +22,7 @@ const config = {
   githubPrNumber: env.GITHUB_PR_NUMBER ? Number(env.GITHUB_PR_NUMBER) : null,
   maxRounds: Number(env.MAX_ROUNDS || 3),
   maxOutputTokens: Number(env.MAX_OUTPUT_TOKENS || 1800),
-  timeoutMs: Number(env.REQUEST_TIMEOUT_MS || 120000),
+  timeoutMs: Number(env.REQUEST_TIMEOUT_MS || 900000),
   maxDiffChars: Number(env.MAX_DIFF_CHARS || 20000),
   maxDiffTotalBytes: Number(env.MAX_DIFF_TOTAL_BYTES || 250000)
 };

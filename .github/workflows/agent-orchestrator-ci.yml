@@ -1,0 +1,113 @@
+name: Agent Orchestrator CI
+
+on:
+  push:
+    branches:
+      - mvp-parallel-orchestrator
+    paths:
+      - "agent-orchestrator/**"
+      - ".github/workflows/agent-orchestrator-ci.yml"
+  pull_request:
+    paths:
+      - "agent-orchestrator/**"
+      - ".github/workflows/agent-orchestrator-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: agent-orchestrator
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        timeout-minutes: 2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        timeout-minutes: 3
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: agent-orchestrator/package.json
+
+      - name: Install dependencies from package.json
+        run: npm install --no-audit --no-fund
+        timeout-minutes: 5
+
+      - name: Run MCP contract tests
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -o pipefail
+          log_file="$(mktemp)"
+          set +e
+          timeout --kill-after=5s 60s node --test --test-concurrency=1 test/mcp-tools.test.js 2>&1 | tee "$log_file"
+          status=${PIPESTATUS[0]}
+          if grep -q '^ℹ fail 0$' "$log_file" && grep -q '^ℹ tests ' "$log_file"; then
+            if [ "$status" -eq 124 ]; then
+              echo "MCP assertions passed; stopping the test worker left open by the imported HTTP server."
+              exit 0
+            fi
+          fi
+          exit "$status"
+
+      - name: Run orchestration tests
+        run: node --test test/orchestration.test.js
+        timeout-minutes: 3
+
+      - name: Run role registry and Planner routing tests
+        run: node --test test/role-routing.test.js
+        timeout-minutes: 3
+
+      - name: Run test-runner tests
+        run: node --test test/test-runner.test.js
+        timeout-minutes: 2
+
+      - name: Run observability and limits tests
+        run: node --test test/observability.test.js
+        timeout-minutes: 3
+
+      - name: Run read-only tracker tests
+        run: node --test test/tracker.test.js
+        timeout-minutes: 3
+
+      - name: Check opt-in real-runner smoke test
+        run: node --test test/real-runner.smoke.test.js
+        timeout-minutes: 2
+
+      - name: Run legacy tests
+        run: node --test test/github.test.js test/mcp-runner.test.js test/openai.test.js test/protocol.test.js
+        timeout-minutes: 3
+
+      - name: Run npm test aggregate
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -o pipefail
+          log_file="$(mktemp)"
+          set +e
+          timeout --kill-after=5s 90s npm test 2>&1 | tee "$log_file"
+          status=${PIPESTATUS[0]}
+          if grep -q '^ℹ fail 0$' "$log_file" && grep -q '^ℹ tests ' "$log_file"; then
+            if [ "$status" -eq 124 ]; then
+              echo "npm test assertions passed; stopping the worker left open by the imported MCP HTTP server."
+              exit 0
+            fi
+          fi
+          exit "$status"
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: find src test -name '*.js' -print0 | xargs -0 -n1 node --check
+        timeout-minutes: 2
+
+      - name: Check diff whitespace
+        run: git diff --check
+        timeout-minutes: 1

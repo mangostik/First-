@@ -30,7 +30,7 @@ export function runAgentReview(input, options = {}) {
   const task = String(input?.task || "").trim();
   if (!task) throw new Error("task is required");
 
-  const timeoutMs = options.timeoutMs ?? 10 * 60 * 1000;
+  const timeoutMs = options.timeoutMs ?? 15 * 60 * 1000;
   const maxBuffer = options.maxBuffer ?? 5 * 1024 * 1024;
   const env = buildReviewEnv(input, options.env || process.env);
 
@@ -38,7 +38,7 @@ export function runAgentReview(input, options = {}) {
     execFile(
       process.execPath,
       [orchestratorPath, task],
-      { env, timeout: timeoutMs, maxBuffer },
+      { env, timeout: timeoutMs, maxBuffer, signal: options.signal },
       (error, stdout, stderr) => {
         if (error) {
           const wrapped = new Error(

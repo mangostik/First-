@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - stage2-github-diff
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
@@ -15,7 +15,7 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: agent-orchestrator
@@ -45,7 +45,7 @@ jobs:
           ANTHROPIC_MODEL: claude-sonnet-4-5
           MAX_ROUNDS: "3"
           MAX_OUTPUT_TOKENS: "1600"
-          REQUEST_TIMEOUT_MS: "120000"
+          REQUEST_TIMEOUT_MS: "900000"
           MAX_DIFF_CHARS: "20000"
           MAX_DIFF_TOTAL_BYTES: "250000"
           GITHUB_TOKEN: ${{ github.token }}
@@ -65,7 +65,7 @@ jobs:
           path: agent-orchestrator/agent-review.json
 
       - name: Post review summary to PR
-        if: github.event_name == 'pull_request_target'
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |

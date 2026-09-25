@@ -3,6 +3,8 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import * as z from "zod";
 import { runAgentReview } from "./mcp-runner.js";
+import { OrchestrationService } from "./orchestration/service.js";
+import { ReadOnlyTracker } from "./orchestration/tracker.js";
 
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "0.0.0.0";
@@ -10,6 +12,14 @@ const accessToken = process.env.MCP_ACCESS_TOKEN || "";
 const pathToken = process.env.MCP_PATH_TOKEN || "";
 const domainChallengeToken = process.env.OPENAI_APPS_CHALLENGE_TOKEN || "";
 const mcpPath = pathToken ? "/mcp/" + pathToken : "/mcp";
+export const ORCHESTRATION_TOOL_NAMES = [
+  "create_orchestration_job",
+  "get_job_status",
+  "get_job_result",
+  "cancel_job"
+];
+const orchestrationService = new OrchestrationService();
+const tracker = new ReadOnlyTracker({ store: orchestrationService.store });
 // Stage 4: keep tool metadata explicit for ChatGPT Plugin Creator validation.
 
 function isAuthorized(req) {
@@ -17,7 +27,51 @@ function isAuthorized(req) {
   return req.headers.authorization === "Bearer " + accessToken;
 }
 
-function createAgentServer() {
+export function registerOrchestrationTools(server, service = orchestrationService) {
+  server.registerTool(
+    "create_orchestration_job",
+    {
+      title: "Create orchestration job",
+      description: "Create a non-blocking MVP orchestration job for an API function and tests.",
+      annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: false },
+      inputSchema: z.object({ task: z.string().min(1).max(12000) })
+    },
+    async input => {
+      try {
+        const result = await service.createJob(input.task);
+        return { content: [{ type: "text", text: JSON.stringify(result) }] };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: error?.message || String(error) }] };
+      }
+    }
+  );
+
+  for (const [name, title, action] of [
+    ["get_job_status", "Get job status", jobId => service.getStatus(jobId)],
+    ["get_job_result", "Get job result", jobId => service.getResult(jobId)],
+    ["cancel_job", "Cancel job", jobId => service.cancelJob(jobId)]
+  ]) {
+    server.registerTool(
+      name,
+      {
+        title,
+        description: `${title} for an orchestration job.`,
+        annotations: { readOnlyHint: name === "get_job_status" || name === "get_job_result", openWorldHint: false, destructiveHint: name === "cancel_job" },
+        inputSchema: z.object({ job_id: z.string().min(1).max(100) })
+      },
+      async input => {
+        try {
+          const result = await action(input.job_id);
+          return { content: [{ type: "text", text: JSON.stringify(result) }] };
+        } catch (error) {
+          return { isError: true, content: [{ type: "text", text: error?.message || String(error) }] };
+        }
+      }
+    );
+  }
+}
+
+export function createAgentServer() {
   const server = new McpServer(
     { name: "fishcrm-agent-orchestrator", version: "0.1.0" },
     {
@@ -85,6 +139,8 @@ function createAgentServer() {
     })
   );
 
+  registerOrchestrationTools(server);
+
   return server;
 }
 
@@ -107,6 +163,8 @@ createServer(async (req, res) => {
     res.end(domainChallengeToken);
     return;
   }
+
+  if (await tracker.handle(req, res)) return;
 
   if (req.url !== mcpPath) {
     res.statusCode = 404;
