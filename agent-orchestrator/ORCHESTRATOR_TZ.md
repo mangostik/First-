@@ -29,8 +29,8 @@
 - [x] Максимум 3 параллельные задачи.
 - [x] Retry, timeout, cancel и обработка падения подзадачи.
 - [x] Сохранение промежуточных результатов.
-- [ ] Полные логи/прогресс и безопасная redaction-наблюдаемость.
-- [ ] Cost/API limits.
+- [x] Полные структурированные job/subtask events, timestamps состояний, duration, attempts и безопасная redaction-наблюдаемость.
+- [x] Cost/API safety limits: max subtasks, concurrency, retries, subtask/job timeout и сохранение нарушений в final result.
 
 ### Runner и выполнение кода
 
@@ -69,9 +69,9 @@
 - [x] `get_job_status`.
 - [x] `get_job_result`.
 - [x] `cancel_job`.
-- [partial] Неблокирующая работа `create_orchestration_job` доказана на service/core уровне; CI workflow запускает MCP runtime/contract проверки, но успешный CI run ещё не подтверждён.
+- [x] Неблокирующая работа `create_orchestration_job` доказана на service/core уровне; MCP contract tests проходят в CI.
 - [x] Unit-тесты статусов, store, Planner, scheduler, retry, timeout, cancel и зависимостей.
-- [partial] MCP contract tests: локальный запуск заблокирован отсутствующим `@modelcontextprotocol/server` и `cache=only-if-cached`; добавлен `.github/workflows/agent-orchestrator-ci.yml`, который устанавливает зависимости через сеть CI и запускает contract tests.
+- [x] MCP contract tests проходят в CI; локальная среда по-прежнему ограничена `cache=only-if-cached` и Windows `spawn EPERM` для Node workers.
 
 ### Deployment
 
@@ -80,4 +80,4 @@
 
 ## Текущий этап
 
-Этап реального параллельного запуска двух независимых agent tasks завершён на service/core уровне: scheduler использует default `concurrency=2`, передаёт отдельные workspaces real adapter, сохраняет результаты и выполняет Integrator, project test gate и job-level Reviewer без merge. Unit/integration проверки real adapter используют injected review и не вызывают API; smoke test opt-in. CI workflow запускает MCP contract, orchestration, test-runner, smoke и legacy проверки, но зелёный CI run ещё не подтверждён из локальной среды. Следующий этап — дождаться CI результата; затем можно расширять role templates/observability/cost limits.
+Этап observability и limits реализован: события, timestamps, duration, attempts, причины retry/timeout/cancel/failure, безопасное логирование, лимиты subtasks/concurrency/retries/subtask timeout/job timeout и limit violations сохраняются в job state и final result. Добавлены unit/integration tests и CI-шаг. Архитектурный review через Claude Orchestrator был запрошен, но не вернул structured result за 5 минут; реализация проверена локальными тестами и CI. Следующий этап — только после отдельного решения расширять role templates или готовить deployment; production merge/deployment не выполнялись.

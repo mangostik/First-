@@ -123,6 +123,12 @@ After all subtasks finish, the Integrator aggregates changed files, tests, warni
 
 Before job-level review, the project test gate runs and stores `test_evidence` with status `passed`, `failed`, `timeout`, or `error`, plus command, exit code, stdout, stderr, and duration. `ORCHESTRATION_TEST_MODE=mock` is the safe default for deterministic tests; `real` runs the configured command (default `npm test`) with `ORCHESTRATION_TEST_TIMEOUT_MS`. Reviewer approval is impossible without `test_evidence.status=passed`.
 
+### Observability and limits
+
+Every job and subtask records structured events, state timestamps, duration, attempts, retry/cancel/failure reasons, and active-task metrics in persisted JSON state and the final result. Logs are opt-in with `ORCHESTRATION_LOG_EVENTS=1` and redact API keys, bearer tokens, and common provider tokens.
+
+Safety limits are configured through `.env.example`: `ORCHESTRATION_MAX_SUBTASKS`, `ORCHESTRATION_MAX_PARALLEL` (capped at three), `ORCHESTRATION_MAX_RETRIES`, `ORCHESTRATION_TIMEOUT_MS`, and `ORCHESTRATION_JOB_TIMEOUT_MS`. Violations are recorded in `limit_violations` and retained in the final result; cancellation records its reason. No automatic merge is performed.
+
 ## Safety
 
 - API keys remain in environment/secrets only.

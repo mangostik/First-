@@ -50,6 +50,9 @@ export function validateAgentResult(value) {
     tests: asStringArray(value.tests || [], "agent result.tests"),
     warnings: asStringArray(value.warnings || [], "agent result.warnings"),
     error: value.error == null ? null : String(value.error)
+    ,timestamps: value.timestamps && typeof value.timestamps === "object" ? value.timestamps : {}
+    ,duration_ms: Number(value.duration_ms || 0)
+    ,retry_reasons: asStringArray(value.retry_reasons || [], "agent result.retry_reasons")
   };
 }
 
@@ -109,7 +112,11 @@ export function validateSubtask(value) {
     workspace: value.workspace == null ? null : validateWorkspace(value.workspace),
     error: value.error == null ? null : String(value.error),
     started_at: value.started_at || null,
-    finished_at: value.finished_at || null
+    finished_at: value.finished_at || null,
+    timestamps: value.timestamps && typeof value.timestamps === "object" ? value.timestamps : {},
+    duration_ms: Number(value.duration_ms || 0),
+    retry_reasons: asStringArray(value.retry_reasons || [], "subtask.retry_reasons"),
+    cancel_reason: value.cancel_reason == null ? null : String(value.cancel_reason)
   };
 }
 
@@ -129,6 +136,10 @@ export function validateFinalJobResult(value) {
     aggregate: value.aggregate == null ? null : validateAggregateResult(value.aggregate),
     test_evidence: value.test_evidence == null ? null : validateTestEvidence(value.test_evidence),
     review: value.review == null ? null : validateReviewResult(value.review)
+    ,events: Array.isArray(value.events) ? value.events : []
+    ,metrics: value.metrics && typeof value.metrics === "object" ? value.metrics : {}
+    ,limit_violations: Array.isArray(value.limit_violations) ? value.limit_violations : []
+    ,duration_ms: Number(value.duration_ms || 0)
   };
 }
 
@@ -148,14 +159,20 @@ export function validateJob(value) {
     test_evidence: value.test_evidence == null ? null : validateTestEvidence(value.test_evidence),
     result: value.result == null ? null : validateFinalJobResult(value.result),
     error: value.error == null ? null : String(value.error),
-    cancelled_at: value.cancelled_at || null
+    cancelled_at: value.cancelled_at || null,
+    timestamps: value.timestamps && typeof value.timestamps === "object" ? value.timestamps : {},
+    events: Array.isArray(value.events) ? value.events : [],
+    metrics: value.metrics && typeof value.metrics === "object" ? value.metrics : {},
+    limit_violations: Array.isArray(value.limit_violations) ? value.limit_violations : [],
+    duration_ms: Number(value.duration_ms || 0)
   };
 }
 
 export function createJob(task, now = new Date().toISOString()) {
   const cleanTask = asString(task, "task");
+  const jobId = randomUUID();
   return {
-    job_id: randomUUID(),
+    job_id: jobId,
     task: cleanTask,
     status: "queued",
     created_at: now,
@@ -165,6 +182,11 @@ export function createJob(task, now = new Date().toISOString()) {
     test_evidence: null,
     result: null,
     error: null,
-    cancelled_at: null
+    cancelled_at: null,
+    timestamps: { queued: now },
+    events: [{ type: "job_state", timestamp: now, job_id: jobId, status: "queued" }],
+    metrics: { active_tasks: 0, max_active_tasks: 0, total_attempts: 0 },
+    limit_violations: [],
+    duration_ms: 0
   };
 }
