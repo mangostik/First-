@@ -1,1 +1,3 @@
 .orchestration-jobs/
+node_modules/
+.orchestration-workspaces/

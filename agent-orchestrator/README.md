@@ -85,6 +85,26 @@ The server also exposes an unauthenticated `/health` endpoint for platform healt
 
 For a remote deployment, set `PORT` as required by the host. The included Dockerfile runs the MCP server on Node 24.
 
+### Production hardening baseline
+
+The production image uses the committed `package-lock.json` and `npm ci --omit=dev --ignore-scripts` for a reproducible dependency install. It starts with `npm run start:mcp`, listens on Railway's `PORT`, and exposes `/health` for the platform healthcheck.
+
+Keep these safe defaults in production until the container has a supported Git/workspace strategy:
+
+```text
+ORCHESTRATION_AGENT_MODE=mock
+ORCHESTRATION_REVIEWER_MODE=mock
+ORCHESTRATION_TEST_MODE=mock
+ORCHESTRATION_MAX_PARALLEL=2
+ORCHESTRATION_MAX_RETRIES=1
+ORCHESTRATION_TIMEOUT_MS=30000
+ORCHESTRATION_JOB_TIMEOUT_MS=300000
+```
+
+Set `MCP_PATH_TOKEN` and `ORCHESTRATION_TRACKER_TOKEN` only as deployment secrets; never commit their values. The production smoke test checks `/health`, authenticated `/tracker`, MCP initialization, `tools/list`, and `orchestrator_status` without calling external model providers.
+
+The current image is not a production real-runner image: it does not contain a Git repository or workspace root. Worktree isolation and the real runner require a separately designed worker environment. Job state is local JSON storage and can disappear after a restart or redeploy.
+
 ### MCP access protection
 
 `MCP_PATH_TOKEN` can make the MCP endpoint an unguessable private path for a personal deployment. `MCP_ACCESS_TOKEN` remains available for non-ChatGPT clients that can send a custom Bearer token.

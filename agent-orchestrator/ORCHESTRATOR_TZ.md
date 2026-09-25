@@ -84,9 +84,12 @@
 
 ### Deployment
 
+- [x] Production hardening baseline: committed lockfile, reproducible `npm ci` Docker build, `.dockerignore`, mock-only safe defaults and dependency-free smoke checks.
+- [x] Production smoke checks cover `/health`, authenticated `/tracker`, MCP initialization, `tools/list` and `orchestrator_status` without provider calls.
+- [x] Ограничения production Docker зафиксированы: worktree isolation/real runner не готовы, job state локальный и эфемерный, `ORCHESTRATION_TRACKER_TOKEN` не хранится в Git.
 - [ ] Production deployment нового MVP.
 - [ ] Railway/Plugin проверка после отдельного разрешения.
 
 ## Текущий этап
 
-Этап observability/limits и read-only web tracker реализованы и подтверждены зелёными CI runs #12/#13. Этап расширения role registry и Planner routing завершён и подтверждён зелёными CI runs #14 (push) и #15 (pull request): добавлены templates для Frontend, Database, Security и Documentation, routing шести рабочих ролей, safe fallback, независимый параллельный запуск и reviewer dependency. Архитектурный review не является блокером из-за исчерпанной OpenAI quota в существующем loop. Production merge/deployment не выполнялись.
+Этап observability/limits и read-only web tracker реализованы и подтверждены зелёными CI runs #12/#13. Этап расширения role registry и Planner routing завершён и подтверждён зелёными CI runs #14 (push) и #15 (pull request). Текущий этап — production hardening в отдельной ветке: lockfile, воспроизводимый Docker build, mock-only defaults и smoke checks подготовлены; merge/deployment не выполнялись. Зафиксировано, что worktree isolation/real runner пока не готовы для production Docker, job state хранится локально, а `ORCHESTRATION_TRACKER_TOKEN` не должен попадать в Git. Production deployment остаётся отдельным следующим этапом и требует явного подтверждения.
