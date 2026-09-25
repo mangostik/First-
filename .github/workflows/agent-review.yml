@@ -50,6 +50,7 @@ jobs:
           OPENAI_REQUEST_TIMEOUT_MS: "120000"
           PROVIDER_MAX_RETRIES: "1"
           STRUCTURED_MAX_RETRIES: "1"
+          REVIEW_LOOP_TIMEOUT_MS: "600000"
           MAX_DIFF_CHARS: "20000"
           MAX_DIFF_TOTAL_BYTES: "250000"
           GITHUB_TOKEN: ${{ github.token }}

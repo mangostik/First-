@@ -77,6 +77,11 @@ npm run start:mcp
 does not open a port. The HTTP listener starts only through `npm run start:mcp`,
 which preserves `/health`, MCP initialization, and the registered tool set.
 
+The Claude/OpenAI review loop uses 120-second per-request timeouts plus a
+600-second `REVIEW_LOOP_TIMEOUT_MS` deadline for the complete provider loop.
+Structured `provider_started`, `provider_completed`, `provider_timeout`,
+`provider_error`, and `review_loop_aborted` events are emitted without secrets.
+
 Default local endpoint:
 
 ```text

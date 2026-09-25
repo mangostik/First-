@@ -1,7 +1,9 @@
-export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0 } = {}) {
+export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0, events = error?.reviewEvents || [] } = {}) {
   const provider = error?.provider || (error?.message || "").match(/^(Claude|OpenAI)/)?.[1] || null;
   const code = error?.code || "REVIEW_ERROR";
-  const status = code === "PROVIDER_TIMEOUT" ? "TIMEOUT" : code === "PROVIDER_ABORTED" ? "CANCELLED" : "FAILED";
+  const status = ["PROVIDER_TIMEOUT", "REVIEW_LOOP_TIMEOUT"].includes(code)
+    ? "TIMEOUT"
+    : code === "PROVIDER_ABORTED" ? "CANCELLED" : "FAILED";
   const reason = String(error?.message || error || "Unknown review failure");
   return {
     final_status: status,
@@ -17,6 +19,7 @@ export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0 } = {
       ready_to_merge: false,
       evidence: [`provider=${provider || "unknown"}`, `error_code=${code}`]
     },
+    events,
     transcript: []
   };
 }

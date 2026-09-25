@@ -9,6 +9,7 @@ import {
 } from "./github.js";
 import { isConsensus, RESPONSE_SCHEMA_HINT } from "./protocol.js";
 import { failureResult } from "./review-result.js";
+import { createReviewEventEmitter, runProviderReviewLoop } from "./review-loop.js";
 
 const env = process.env;
 const config = {
@@ -28,6 +29,7 @@ const config = {
   openaiTimeoutMs: Number(env.OPENAI_REQUEST_TIMEOUT_MS || env.REQUEST_TIMEOUT_MS || 120000),
   providerMaxRetries: Number(env.PROVIDER_MAX_RETRIES || 1),
   structuredMaxRetries: Number(env.STRUCTURED_MAX_RETRIES || 1),
+  reviewLoopTimeoutMs: Number(env.REVIEW_LOOP_TIMEOUT_MS || 600000),
   maxDiffChars: Number(env.MAX_DIFF_CHARS || 20000),
   maxDiffTotalBytes: Number(env.MAX_DIFF_TOTAL_BYTES || 250000)
 };
@@ -156,60 +158,6 @@ async function loadOptionalDiffChunks() {
   return splitDiffIntoChunks(raw, config.maxDiffChars);
 }
 
-async function reviewChunk({ task, diff, chunkIndex, chunkCount }) {
-  let lastOpenAI = null;
-  const transcript = [];
-
-  for (let round = 1; round <= config.maxRounds; round++) {
-    const claude = await askClaude({
-      apiKey: config.anthropicApiKey,
-      model: config.anthropicModel,
-      prompt: claudePrompt({ task, diff, chunkIndex, chunkCount, round, openaiReview: lastOpenAI }),
-      maxOutputTokens: config.maxOutputTokens,
-      timeoutMs: config.claudeTimeoutMs,
-      maxRetries: config.providerMaxRetries
-    });
-
-    const openai = await askOpenAI({
-      apiKey: config.openaiApiKey,
-      model: config.openaiModel,
-      prompt: openaiPrompt({ task, diff, chunkIndex, chunkCount, round, claudeResponse: claude }),
-      maxOutputTokens: config.maxOutputTokens,
-      timeoutMs: config.openaiTimeoutMs,
-      maxRetries: config.providerMaxRetries,
-      maxStructuredRetries: config.structuredMaxRetries
-    });
-
-    transcript.push({ round, claude, openai });
-
-    if (isConsensus(claude, openai)) {
-      return { final_status: "CONSENSUS", rounds: round, decision: openai, transcript };
-    }
-
-    if (claude.status === "blocked" && openai.status === "blocked") {
-      return { final_status: "BLOCKED", rounds: round, decision: openai, transcript };
-    }
-
-    lastOpenAI = openai;
-  }
-
-  if (lastOpenAI && lastOpenAI.status === "blocked") {
-    return {
-      final_status: "BLOCKED",
-      rounds: config.maxRounds,
-      decision: lastOpenAI,
-      transcript
-    };
-  }
-
-  return {
-    final_status: "FINAL_DECISION",
-    rounds: config.maxRounds,
-    decision: lastOpenAI,
-    transcript
-  };
-}
-
 function unique(items) {
   return [...new Set(items.filter(Boolean))];
 }
@@ -222,7 +170,7 @@ function chunkSummary(results) {
   }));
 }
 
-async function synthesizeChunkResults({ task, results }) {
+async function synthesizeChunkResults({ task, results, signal, callProvider }) {
   const prompt = [
     "You are OpenAI acting as the final cross-chunk arbiter.",
     "The GitHub diff was too large for a single review and was reviewed in multiple chunks.",
@@ -246,15 +194,16 @@ async function synthesizeChunkResults({ task, results }) {
     jsonRule()
   ].join("\n");
 
-  return askOpenAI({
+  return callProvider("OpenAI", providerSignal => askOpenAI({
     apiKey: config.openaiApiKey,
     model: config.openaiModel,
     prompt,
     maxOutputTokens: config.maxOutputTokens,
     timeoutMs: config.openaiTimeoutMs,
+    signal: providerSignal || signal,
     maxRetries: config.providerMaxRetries,
     maxStructuredRetries: config.structuredMaxRetries
-  });
+  }), { phase: "synthesis" });
 }
 
 function aggregateChunkResults(results, synthesis = null) {
@@ -314,6 +263,11 @@ function aggregateChunkResults(results, synthesis = null) {
 async function main() {
   const task = readTaskFromArgs();
   let chunks = [];
+  const reviewEvents = [];
+  const { emit } = createReviewEventEmitter({
+    events: reviewEvents,
+    write: line => process.stderr.write("[review-event] " + line)
+  });
 
   try {
     chunks = await loadOptionalDiffChunks();
@@ -341,21 +295,22 @@ async function main() {
   }
 
   const reviewChunks = chunks.length ? chunks : [""];
-  const chunkResults = [];
-
-  for (let index = 0; index < reviewChunks.length; index++) {
-    const result = await reviewChunk({
+  let chunkResults;
+  let synthesis;
+  try {
+    ({ chunkResults, synthesis } = await runProviderReviewLoop({
       task,
-      diff: reviewChunks[index],
-      chunkIndex: index + 1,
-      chunkCount: reviewChunks.length
-    });
-    chunkResults.push({ chunk: index + 1, ...result });
+      chunks: reviewChunks,
+      config,
+      promptBuilders: { claude: claudePrompt, openai: openaiPrompt },
+      synthesize: synthesizeChunkResults,
+      isConsensus,
+      emit
+    }));
+  } catch (error) {
+    error.reviewEvents = reviewEvents;
+    throw error;
   }
-
-  const synthesis = chunkResults.length > 1
-    ? await synthesizeChunkResults({ task, results: chunkResults })
-    : null;
   const aggregate = aggregateChunkResults(chunkResults, synthesis);
 
   process.stdout.write(JSON.stringify({
@@ -364,6 +319,7 @@ async function main() {
     chunks_reviewed: chunkResults.length,
     chunks_total: reviewChunks.length,
     synthesis,
+    events: reviewEvents,
     transcript: chunkResults
   }, null, 2) + "\n");
 }
