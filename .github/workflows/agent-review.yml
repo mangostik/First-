@@ -21,10 +21,10 @@ jobs:
         working-directory: agent-orchestrator
 
     steps:
-      - name: Checkout trusted orchestrator code
+      - name: Checkout review code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.pull_request.base.sha || github.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
