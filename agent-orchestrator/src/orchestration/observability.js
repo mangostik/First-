@@ -1,12 +1,15 @@
 const SECRET_KEY = /(api.?key|authorization|token|password|secret|credential)/i;
 const SECRET_VALUE = /(bearer\s+|sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,})/gi;
+const SECRET_ASSIGNMENT = /((?:api[_-]?key|authorization|token|password|secret)\s*[:=]\s*)[^\s,;]+/gi;
 
 export function redactSecrets(value) {
   if (Array.isArray(value)) return value.map(redactSecrets);
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, SECRET_KEY.test(key) ? "[REDACTED]" : redactSecrets(item)]));
   }
-  return typeof value === "string" ? value.replace(SECRET_VALUE, match => match.toLowerCase().startsWith("bearer") ? "Bearer [REDACTED]" : "[REDACTED]") : value;
+  return typeof value === "string"
+    ? value.replace(SECRET_ASSIGNMENT, "$1[REDACTED]").replace(SECRET_VALUE, match => match.toLowerCase().startsWith("bearer") ? "Bearer [REDACTED]" : "[REDACTED]")
+    : value;
 }
 
 export function createEvent(type, data = {}) {

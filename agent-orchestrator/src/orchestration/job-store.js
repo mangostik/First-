@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { validateJob } from "./schemas.js";
@@ -34,6 +34,20 @@ export class JsonJobStore {
   async get(jobId) {
     const raw = await readFile(this.pathFor(jobId), "utf8");
     return validateJob(JSON.parse(raw));
+  }
+
+  async list() {
+    await this.init();
+    const names = await readdir(this.rootDir);
+    const jobs = [];
+    for (const name of names.filter(value => value.endsWith(".json"))) {
+      try {
+        jobs.push(validateJob(JSON.parse(await readFile(join(this.rootDir, name), "utf8"))));
+      } catch {
+        // Ignore incomplete or unrelated files; atomic job writes remain readable.
+      }
+    }
+    return jobs.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
   }
 
   async write(job) {

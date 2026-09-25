@@ -4,6 +4,7 @@ import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import * as z from "zod";
 import { runAgentReview } from "./mcp-runner.js";
 import { OrchestrationService } from "./orchestration/service.js";
+import { ReadOnlyTracker } from "./orchestration/tracker.js";
 
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "0.0.0.0";
@@ -18,6 +19,7 @@ export const ORCHESTRATION_TOOL_NAMES = [
   "cancel_job"
 ];
 const orchestrationService = new OrchestrationService();
+const tracker = new ReadOnlyTracker({ store: orchestrationService.store });
 // Stage 4: keep tool metadata explicit for ChatGPT Plugin Creator validation.
 
 function isAuthorized(req) {
@@ -161,6 +163,8 @@ createServer(async (req, res) => {
     res.end(domainChallengeToken);
     return;
   }
+
+  if (await tracker.handle(req, res)) return;
 
   if (req.url !== mcpPath) {
     res.statusCode = 404;

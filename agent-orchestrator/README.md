@@ -129,6 +129,12 @@ Every job and subtask records structured events, state timestamps, duration, att
 
 Safety limits are configured through `.env.example`: `ORCHESTRATION_MAX_SUBTASKS`, `ORCHESTRATION_MAX_PARALLEL` (capped at three), `ORCHESTRATION_MAX_RETRIES`, `ORCHESTRATION_TIMEOUT_MS`, and `ORCHESTRATION_JOB_TIMEOUT_MS`. Violations are recorded in `limit_violations` and retained in the final result; cancellation records its reason. No automatic merge is performed.
 
+### Read-only web tracker
+
+The Node service includes a dependency-free read-only tracker at `/tracker`. It exposes `GET /api/jobs`, `GET /api/jobs/:jobId`, `GET /api/jobs/:jobId/events`, and an SSE stream on the same events path when the client requests `text/event-stream`. The panel displays job status, subtasks, event timeline, evidence, warnings, limit violations, aggregate data, and reviewer result. It never creates, cancels, edits, or executes work.
+
+Set `ORCHESTRATION_TRACKER_TOKEN` to require `Authorization: Bearer <token>`. An authenticated HTML request receives an HttpOnly same-origin cookie so the browser's fetch and `EventSource` calls remain protected. Responses and SSE payloads use the existing observability redaction; CORS is not enabled and no MCP/API secret is rendered into the panel.
+
 ## Safety
 
 - API keys remain in environment/secrets only.

@@ -73,6 +73,14 @@
 - [x] Unit-тесты статусов, store, Planner, scheduler, retry, timeout, cancel и зависимостей.
 - [x] MCP contract tests проходят в CI; локальная среда по-прежнему ограничена `cache=only-if-cached` и Windows `spawn EPERM` для Node workers.
 
+### Read-only observability tracker
+
+- [x] Read-only API: job list, job details и job events.
+- [x] SSE-поток на базе существующей observability event model.
+- [x] Dependency-free HTML-панель со статусами agents/subtasks, timeline, test evidence, warnings, limits, aggregate и review result.
+- [x] Tracker access token, same-origin cookie, no CORS, redaction и отсутствие write/command operations.
+- [x] Unit/API/SSE/security tests, включая invalid job id, unauthorized access и token leak protection.
+
 ### Deployment
 
 - [ ] Production deployment нового MVP.
@@ -80,4 +88,4 @@
 
 ## Текущий этап
 
-Этап observability и limits реализован: события, timestamps, duration, attempts, причины retry/timeout/cancel/failure, безопасное логирование, лимиты subtasks/concurrency/retries/subtask timeout/job timeout и limit violations сохраняются в job state и final result. Добавлены unit/integration tests и CI-шаг. Архитектурный review через Claude Orchestrator был запрошен, но не вернул structured result за 5 минут; реализация проверена локальными тестами и зелёным CI run #8 (`7629c09`). Следующий этап — только после отдельного решения расширять role templates или готовить deployment; production merge/deployment не выполнялись.
+Этап observability и limits реализован и подтверждён зелёным CI run #8 (`7629c09`). Текущий этап — минимальный read-only web tracker поверх существующего job state/event model: API, SSE и inline HTML panel добавлены без новых зависимостей, ролей, команд или write operations. Ограниченный архитектурный review tracker был запрошен после реализации, но заблокирован исчерпанной квотой OpenAI в существующем review loop; это не выдаётся за успешный review. Production merge/deployment не выполнялись.
