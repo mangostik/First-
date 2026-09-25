@@ -4,10 +4,13 @@ on:
   push:
     branches:
       - mvp-parallel-orchestrator
+      - production-hardening
     paths:
       - "agent-orchestrator/**"
       - ".github/workflows/agent-orchestrator-ci.yml"
   pull_request:
+    branches:
+      - stage4-mcp
     paths:
       - "agent-orchestrator/**"
       - ".github/workflows/agent-orchestrator-ci.yml"
