@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - stage2-github-diff
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
@@ -65,7 +65,7 @@ jobs:
           path: agent-orchestrator/agent-review.json
 
       - name: Post review summary to PR
-        if: github.event_name == 'pull_request_target'
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
