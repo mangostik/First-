@@ -13,8 +13,17 @@ on:
           - standard
           - deep
       pr_number:
-        description: "Optional pull request number to review as untrusted diff data"
+        description: "Deprecated alias; use pull_request_number"
         required: false
+        type: string
+      pull_request_number:
+        description: "Pull request number to review as untrusted diff data"
+        required: false
+        type: string
+      review_ref:
+        description: "Trusted reviewer ref; must be stage4-mcp"
+        required: false
+        default: stage4-mcp
         type: string
 
 permissions:
@@ -30,7 +39,28 @@ jobs:
         working-directory: agent-orchestrator
 
     steps:
-      - name: Checkout review code
+      - name: Validate trusted reviewer ref
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          REVIEW_REF: ${{ inputs.review_ref || 'stage4-mcp' }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number || inputs.pr_number || '' }}
+        run: |
+          set -eu
+          test "$WORKFLOW_REF" = "refs/heads/stage4-mcp" || {
+            echo "Refused: Agent Review must be dispatched from trusted stage4-mcp" >&2
+            exit 1
+          }
+          test "$REVIEW_REF" = "stage4-mcp" || {
+            echo "Refused: review_ref must be stage4-mcp" >&2
+            exit 1
+          }
+          if test -n "$PULL_REQUEST_NUMBER"; then
+            case "$PULL_REQUEST_NUMBER" in
+              *[!0-9]*) echo "Refused: pull_request_number must be numeric" >&2; exit 1 ;;
+            esac
+          fi
+
+      - name: Checkout trusted reviewer code
         uses: actions/checkout@v4
         with:
           # Provider-bearing code must come only from the trusted base branch.
@@ -76,9 +106,9 @@ jobs:
           MAX_DIFF_TOTAL_BYTES: "250000"
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPO: ${{ github.repository }}
-          GITHUB_PR_NUMBER: ${{ inputs.pr_number || '' }}
-          GITHUB_BASE: ${{ inputs.pr_number && '' || 'stage4-mcp' }}
-          GITHUB_HEAD: ${{ inputs.pr_number && '' || github.ref_name }}
+          GITHUB_PR_NUMBER: ${{ inputs.pull_request_number || inputs.pr_number || '' }}
+          GITHUB_BASE: stage4-mcp
+          GITHUB_HEAD: ${{ github.ref_name }}
         run: |
           test -n "$OPENAI_API_KEY" || { echo "Missing repository secret OPENAI_API_KEY"; exit 1; }
           test -n "$ANTHROPIC_API_KEY" || { echo "Missing repository secret ANTHROPIC_API_KEY"; exit 1; }
