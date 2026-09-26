@@ -7,6 +7,9 @@ export function aggregateChunkResults(results, synthesis = null, coverageComplet
   const hasBlocked = results.some(item =>
     item.final_status === "BLOCKED" || item.decision?.status === "blocked"
   ) || synthesis?.status === "blocked";
+  const preservedTerminalStatus = results.find(item =>
+    ["TIMEOUT", "COST_LIMIT", "FAILED"].includes(item.final_status)
+  )?.final_status;
   const allConsensus = results.every(item => item.final_status === "CONSENSUS");
   const allReady = decisions.every(item => item.ready_to_merge === true);
   const synthesisDecisions = synthesis ? [...decisions, synthesis] : decisions;
@@ -26,13 +29,15 @@ export function aggregateChunkResults(results, synthesis = null, coverageComplet
   );
   // An objective blocker must never be downgraded just because coverage is
   // incomplete. Keep BLOCKED visible to downstream policy/adjudication.
-  const finalStatus = hasBlocked
-    ? "BLOCKED"
-    : !coverageComplete
-      ? "FINAL_DECISION"
-      : allConsensus && allReady && criticalIssues.length === 0 && synthesisAgrees
-        ? "CONSENSUS"
-        : "FINAL_DECISION";
+  const finalStatus = preservedTerminalStatus || (
+    hasBlocked
+      ? "BLOCKED"
+      : !coverageComplete
+        ? "BLOCKED"
+        : allConsensus && allReady && criticalIssues.length === 0 && synthesisAgrees
+          ? "CONSENSUS"
+          : "FINAL_DECISION"
+  );
   return {
     final_status: finalStatus,
     rounds: results.reduce((sum, item) => sum + (item.rounds || 0), 0),

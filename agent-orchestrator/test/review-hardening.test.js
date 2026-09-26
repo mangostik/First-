@@ -7,12 +7,22 @@ import { writeAtomicJson } from "../src/progress.js";
 import { aggregateChunkResults } from "../src/aggregation.js";
 import { createReviewEventEmitter } from "../src/review-loop.js";
 
-test("incomplete coverage can never produce ready_to_merge", () => {
+test("incomplete cheap coverage blocks a previously approving aggregate", () => {
   const result = aggregateChunkResults([
     { final_status: "CONSENSUS", rounds: 1, decision: { status: "agree", ready_to_merge: true, critical_issues: [], recommended_changes: [], evidence: [] } }
   ], null, false);
-  assert.equal(result.final_status, "FINAL_DECISION");
+  assert.equal(result.final_status, "BLOCKED");
   assert.equal(result.decision.ready_to_merge, false);
+});
+
+test("aggregate preserves explicit terminal failure statuses", () => {
+  for (const status of ["TIMEOUT", "COST_LIMIT", "FAILED"]) {
+    const result = aggregateChunkResults([
+      { final_status: status, rounds: 1, decision: { status: "needs_changes", ready_to_merge: false, critical_issues: [], recommended_changes: [], evidence: [] } }
+    ], null, false);
+    assert.equal(result.final_status, status);
+    assert.equal(result.decision.ready_to_merge, false);
+  }
 });
 
 test("incomplete coverage preserves an explicit BLOCKED result", () => {
