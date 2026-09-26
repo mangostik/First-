@@ -128,6 +128,8 @@ Set `MCP_PATH_TOKEN` and `ORCHESTRATION_TRACKER_TOKEN` only as deployment secret
 
 The current image is not a production real-runner image: it does not contain a Git repository or workspace root. In `mock` agent mode, subtasks receive retained directory-only workspace descriptors and do not invoke Git; worktree isolation and the real runner require a separately designed worker environment. Job state is local JSON storage and can disappear after a restart or redeploy.
 
+For Railway staging, use `npm run start:mcp` as the service Start Command. The Dockerfile already supplies `PORT=3000`; do not prefix the command with `PORT=3000`, because Railway executes the configured command directly and would interpret `port=3000` as the executable name.
+
 ### MCP access protection
 
 `MCP_PATH_TOKEN` can make the MCP endpoint an unguessable private path for a personal deployment. `MCP_ACCESS_TOKEN` remains available for non-ChatGPT clients that can send a custom Bearer token.
