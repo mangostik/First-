@@ -1,32 +1,77 @@
 name: Agent Review
 
 on:
-  push:
-    branches:
-      - stage2-github-diff
-      - stage3-pr-feedback
-  pull_request_target:
-    types: [opened, synchronize, reopened]
   workflow_dispatch:
+    inputs:
+      review_mode:
+        description: "Review cost mode"
+        required: false
+        default: cheap
+        type: choice
+        options:
+          - cheap
+          - standard
+          - deep
+      pull_request_number:
+        description: "Pull request number to review as untrusted diff data"
+        required: false
+        type: string
+      review_ref:
+        description: "Trusted reviewer ref; must be stage4-mcp"
+        required: false
+        default: stage4-mcp
+        type: string
 
 permissions:
   contents: read
   pull-requests: write
-  issues: write
 
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: agent-orchestrator
+    # Standard has a ten-minute provider budget; leave time for tests and artifacts.
+    timeout-minutes: 20
 
     steps:
-      - name: Checkout trusted orchestrator code
+      - name: Validate trusted reviewer dispatch
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          REVIEW_REF: ${{ inputs.review_ref || 'stage4-mcp' }}
+          REVIEW_MODE: ${{ inputs.review_mode || 'cheap' }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number || '' }}
+        run: |
+          set -eu
+          test "$WORKFLOW_REF" = "refs/heads/stage4-mcp" || {
+            echo "Refused: Agent Review must be dispatched from trusted stage4-mcp" >&2
+            exit 1
+          }
+          test "$REVIEW_REF" = "stage4-mcp" || {
+            echo "Refused: review_ref must be stage4-mcp" >&2
+            exit 1
+          }
+          case "$REVIEW_MODE" in
+            cheap|standard|deep) ;;
+            *) echo "Refused: review_mode must be cheap, standard, or deep" >&2; exit 1 ;;
+          esac
+          if test -n "$PULL_REQUEST_NUMBER"; then
+            case "$PULL_REQUEST_NUMBER" in
+              *[!0-9]*) echo "Refused: pull_request_number must be numeric" >&2; exit 1 ;;
+            esac
+          fi
+
+      - name: Checkout trusted reviewer code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          # Provider-bearing code comes only from the trusted branch.
+          # The requested PR is fetched by the review loop only as diff data.
+          ref: stage4-mcp
+
+      - name: Validate orchestrator workspace layout
+        run: |
+          set -eu
+          test -f agent-orchestrator/package.json || { echo "Missing agent-orchestrator/package.json" >&2; exit 1; }
+          test -f agent-orchestrator/src/index.js || { echo "Missing agent-orchestrator/src/index.js" >&2; exit 1; }
+          test -d agent-orchestrator/test || { echo "Missing agent-orchestrator/test" >&2; exit 1; }
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -34,9 +79,11 @@ jobs:
           node-version: "24"
 
       - name: Install dependencies without lifecycle scripts
+        working-directory: agent-orchestrator
         run: npm install --ignore-scripts
 
       - name: Run tests without API secrets
+        working-directory: agent-orchestrator
         run: npm test
 
       - name: Run Claude + OpenAI review
@@ -45,93 +92,52 @@ jobs:
           OPENAI_MODEL: gpt-5.6
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: claude-sonnet-4-5
+          REVIEW_MODE: ${{ inputs.review_mode || 'cheap' }}
+          REVIEW_MAX_CHUNKS: ${{ inputs.review_mode == 'cheap' && '4' || '0' }}
+          REVIEW_MAX_ROUNDS: ${{ inputs.review_mode == 'deep' && '3' || '1' }}
+          REVIEW_MAX_PROVIDER_CALLS: ${{ inputs.review_mode == 'cheap' && '8' || inputs.review_mode == 'standard' && '40' || '100' }}
+          REVIEW_MAX_OUTPUT_TOKENS: ${{ inputs.review_mode == 'deep' && '1800' || '1200' }}
+          REVIEW_TIME_BUDGET_MS: ${{ inputs.review_mode == 'standard' && '600000' || '240000' }}
+          REVIEW_COST_BUDGET_USD: "0.50"
+          REVIEW_ESTIMATED_COST_PER_1K_TOKENS_USD: "0.01"
           MAX_ROUNDS: "3"
           MAX_OUTPUT_TOKENS: "1600"
           REQUEST_TIMEOUT_MS: "120000"
+          CLAUDE_REQUEST_TIMEOUT_MS: "120000"
+          OPENAI_REQUEST_TIMEOUT_MS: "120000"
+          PROVIDER_MAX_RETRIES: "1"
+          STRUCTURED_MAX_RETRIES: "1"
+          REVIEW_LOOP_TIMEOUT_MS: "600000"
+          REVIEW_LOOP_GUARD_MS: "1000"
+          REVIEW_PROGRESS_FILE: agent-review-progress.json
           MAX_DIFF_CHARS: "20000"
           MAX_DIFF_TOTAL_BYTES: "250000"
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPO: ${{ github.repository }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
-          GITHUB_BASE: ${{ github.event.pull_request.number && '' || 'stage1-agent-orchestrator' }}
-          GITHUB_HEAD: ${{ github.event.pull_request.number && '' || github.ref_name }}
+          GITHUB_PR_NUMBER: ${{ inputs.pull_request_number || '' }}
+          GITHUB_BASE: stage4-mcp
+          GITHUB_HEAD: stage4-mcp
+        working-directory: agent-orchestrator
         run: |
-          test -n "$OPENAI_API_KEY" || { echo "Missing repository secret OPENAI_API_KEY"; exit 1; }
-          test -n "$ANTHROPIC_API_KEY" || { echo "Missing repository secret ANTHROPIC_API_KEY"; exit 1; }
+          test -n "$OPENAI_API_KEY" || { echo "Missing repository secret OPENAI_API_KEY" >&2; exit 1; }
+          test -n "$ANTHROPIC_API_KEY" || { echo "Missing repository secret ANTHROPIC_API_KEY" >&2; exit 1; }
+          set -o pipefail
           node src/index.js "Review this GitHub diff. Find only concrete high-impact problems; do not nitpick style." | tee agent-review.json
 
       - name: Upload review result
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-review
-          path: agent-orchestrator/agent-review.json
+          path: |
+            agent-orchestrator/agent-review.json
+            agent-orchestrator/agent-review-progress.json
 
+      # PR summaries remain disabled: manual review data is available in the artifact,
+      # and no issue-comment write occurs outside an explicitly approved follow-up.
       - name: Post review summary to PR
-        if: github.event_name == 'pull_request_target' || github.event_name == 'push'
+        if: false
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const marker = '<!-- agent-review -->';
-            const result = JSON.parse(fs.readFileSync('agent-orchestrator/agent-review.json', 'utf8'));
-            const decision = result.decision || {};
-            const issues = Array.isArray(decision.critical_issues) ? decision.critical_issues : [];
-            const changes = Array.isArray(decision.recommended_changes) ? decision.recommended_changes : [];
-
-            const bullet = items => items.length
-              ? items.slice(0, 8).map(x => '- ' + x).join('\n')
-              : '- None';
-
-            const body = [
-              marker,
-              '## Agent Review',
-              '',
-              '**Final status:** `' + (result.final_status || 'unknown') + '`',
-              '**Decision:** `' + (decision.status || 'unknown') + '`',
-              '**Ready to merge:** `' + String(Boolean(decision.ready_to_merge)) + '`',
-              '**Rounds:** `' + String(result.rounds ?? 0) + '`',
-              '**Chunks:** `' + String(result.chunks_reviewed ?? 0) + '/' + String(result.chunks_total ?? 0) + '`',
-              '',
-              '### Critical issues',
-              bullet(issues),
-              '',
-              '### Recommended changes',
-              bullet(changes),
-              '',
-              '_Generated automatically by Claude + OpenAI orchestrator._'
-            ].join('\n');
-
-            const { owner, repo } = context.repo;
-            let issue_number = context.issue.number;
-            if (!issue_number && context.eventName === 'push') {
-              const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                owner, repo, commit_sha: context.sha
-              });
-              const open = prs.data.find(pr => pr.state === 'open');
-              if (!open) {
-                core.info('No open pull request associated with this push; skipping PR summary.');
-                return;
-              }
-              issue_number = open.number;
-            }
-            if (!issue_number) {
-              core.info('No pull request context; skipping PR summary.');
-              return;
-            }
-
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner, repo, issue_number, per_page: 100
-            });
-            const existing = comments.find(c =>
-              c.user?.type === 'Bot' && typeof c.body === 'string' && c.body.includes(marker)
-            );
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner, repo, comment_id: existing.id, body
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner, repo, issue_number, body
-              });
-            }
+            core.info("Manual Agent Review summary publishing is disabled.");
