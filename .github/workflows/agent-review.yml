@@ -52,6 +52,7 @@ jobs:
           STRUCTURED_MAX_RETRIES: "1"
           REVIEW_LOOP_TIMEOUT_MS: "600000"
           REVIEW_LOOP_GUARD_MS: "1000"
+          REVIEW_PROGRESS_FILE: agent-review-progress.json
           MAX_DIFF_CHARS: "20000"
           MAX_DIFF_TOTAL_BYTES: "250000"
           GITHUB_TOKEN: ${{ github.token }}
@@ -70,7 +71,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agent-review
-          path: agent-orchestrator/agent-review.json
+          path: |
+            agent-orchestrator/agent-review.json
+            agent-orchestrator/agent-review-progress.json
 
       - name: Post review summary to PR
         if: always() && github.event_name == 'pull_request'

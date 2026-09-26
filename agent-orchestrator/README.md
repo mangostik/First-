@@ -82,6 +82,14 @@ The Claude/OpenAI review loop uses 120-second per-request timeouts plus a
 Structured `provider_started`, `provider_completed`, `provider_timeout`,
 `provider_error`, and `review_loop_aborted` events are emitted without secrets.
 
+Synchronous MCP `run_agent_review` calls have an independent 240-second
+`MCP_REVIEW_DEADLINE_MS` default, below the MCP gateway limit. On timeout the
+runner reads the child progress checkpoint and returns structured JSON with
+`ready_to_merge=false`, the last provider/chunk/round, executed chunks,
+events, and elapsed time. For longer work, use the existing asynchronous
+orchestration tools: `create_orchestration_job`, then poll
+`get_job_status`/`get_job_result` or the read-only tracker.
+
 Default local endpoint:
 
 ```text

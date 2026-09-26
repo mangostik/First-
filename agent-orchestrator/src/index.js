@@ -1,5 +1,7 @@
 import { askClaude } from "./providers/claude.js";
 import { askOpenAI } from "./providers/openai.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   fetchGitHubDiff,
   fetchGitHubPullRequestDiff,
@@ -10,6 +12,8 @@ import {
 import { isConsensus, RESPONSE_SCHEMA_HINT } from "./protocol.js";
 import { failureResult } from "./review-result.js";
 import { createReviewEventEmitter, runProviderReviewLoop } from "./review-loop.js";
+
+const processStartedAt = Date.now();
 
 const env = process.env;
 const config = {
@@ -265,10 +269,43 @@ async function main() {
   const task = readTaskFromArgs();
   let chunks = [];
   const reviewEvents = [];
-  const { emit } = createReviewEventEmitter({
+  const progressFile = process.env.REVIEW_PROGRESS_FILE || "";
+  const startedAt = processStartedAt;
+  let totalChunks = 0;
+  const writeCheckpoint = data => {
+    if (!progressFile) return;
+    const payload = {
+      final_status: data.final_status || "IN_PROGRESS",
+      ready_to_merge: false,
+      chunks_reviewed: data.chunks_reviewed ?? data.partial_result?.mandatory_completed ?? 0,
+      chunks_total: data.chunks_total ?? totalChunks,
+      coverage_complete: data.coverage_complete === true,
+      elapsed_ms: Date.now() - startedAt,
+      last_provider: data.last_provider || null,
+      last_chunk: data.last_chunk || null,
+      last_round: data.last_round || null,
+      events: reviewEvents,
+      partial_result: data.partial_result || null
+    };
+    try {
+      mkdirSync(dirname(progressFile), { recursive: true });
+      writeFileSync(progressFile, JSON.stringify(payload), "utf8");
+    } catch {}
+  };
+  const { emit: appendEvent } = createReviewEventEmitter({
     events: reviewEvents,
     write: line => process.stderr.write("[review-event] " + line)
   });
+  const emit = event => {
+    const result = appendEvent(event);
+    writeCheckpoint({
+      last_provider: result.provider || null,
+      last_chunk: result.chunk || null,
+      last_round: result.round || null,
+      chunks_total: totalChunks
+    });
+    return result;
+  };
 
   try {
     chunks = await loadOptionalDiffChunks();
@@ -290,12 +327,21 @@ async function main() {
         chunks_total: 0,
         transcript: []
       }, null, 2) + "\n");
+      writeCheckpoint({
+        final_status: "BLOCKED",
+        chunks_reviewed: 0,
+        chunks_total: 0,
+        coverage_complete: false,
+        partial_result: null
+      });
       return;
     }
     throw error;
   }
 
   const reviewChunks = chunks.length ? chunks : [""];
+  totalChunks = reviewChunks.length;
+  writeCheckpoint({ chunks_total: totalChunks });
   let chunkResults;
   let synthesis;
   try {
@@ -313,8 +359,7 @@ async function main() {
     throw error;
   }
   const aggregate = aggregateChunkResults(chunkResults, synthesis);
-
-  process.stdout.write(JSON.stringify({
+  const result = {
     ...aggregate,
     diff_loaded: chunks.length > 0,
     chunks_reviewed: chunkResults.length,
@@ -322,11 +367,29 @@ async function main() {
     synthesis,
     events: reviewEvents,
     transcript: chunkResults
-  }, null, 2) + "\n");
+  };
+  writeCheckpoint({
+    final_status: result.final_status,
+    chunks_reviewed: result.chunks_reviewed,
+    chunks_total: result.chunks_total,
+    coverage_complete: result.coverage_complete,
+    partial_result: null
+  });
+  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
 }
 
 main().catch(error => {
   console.error(error && error.stack ? error.stack : String(error));
-  process.stdout.write(JSON.stringify(failureResult(error, { partial: error.partialResult }), null, 2) + "\n");
+  const result = failureResult(error, { partial: error.partialResult });
+  if (process.env.REVIEW_PROGRESS_FILE) {
+    try {
+      mkdirSync(dirname(process.env.REVIEW_PROGRESS_FILE), { recursive: true });
+      writeFileSync(process.env.REVIEW_PROGRESS_FILE, JSON.stringify({
+        ...result,
+        elapsed_ms: Date.now() - processStartedAt
+      }), "utf8");
+    } catch {}
+  }
+  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
   process.exitCode = 1;
 });

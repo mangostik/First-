@@ -40,7 +40,9 @@ export async function runProviderReviewLoop({ task, chunks, config, promptBuilde
   const deadlineMs = Number(config.reviewLoopTimeoutMs);
   const deadlineAt = Date.now() + deadlineMs;
   const guardMs = Number(config.reviewLoopGuardMs || 1000);
-  const partial = { chunkResults: [], mandatory_completed: 0, followups_completed: 0, chunks_total: chunks.length, coverage_complete: false, synthesis: null };
+  const startedAt = Date.now();
+  const partial = { chunkResults: [], mandatory_completed: 0, followups_completed: 0, chunks_total: chunks.length, coverage_complete: false, synthesis: null, elapsed_ms: 0, last_provider: null, last_chunk: null, last_round: null };
+  const refreshPartial = () => { partial.elapsed_ms = Date.now() - startedAt; return partial; };
   const timeoutError = reason => new ReviewLoopTimeoutError(reason || `review loop timed out after ${deadlineMs}ms`, JSON.parse(JSON.stringify(partial)));
   const assertTimeAvailable = provider => {
     const timeoutMs = provider === "Claude" ? Number(config.claudeTimeoutMs) : Number(config.openaiTimeoutMs);
@@ -50,6 +52,10 @@ export async function runProviderReviewLoop({ task, chunks, config, promptBuilde
 
   const callProvider = async (provider, invoke, meta = {}) => {
     assertTimeAvailable(provider);
+    partial.last_provider = provider;
+    partial.last_chunk = meta.chunk || null;
+    partial.last_round = meta.round || null;
+    refreshPartial();
     emit({ type: "provider_started", provider, ...meta });
     try {
       const result = await invoke(controller.signal);
