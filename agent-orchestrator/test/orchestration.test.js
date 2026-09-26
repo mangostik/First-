@@ -16,7 +16,7 @@ import {
 import { DependencyScheduler } from "../src/orchestration/scheduler.js";
 import { OrchestrationService } from "../src/orchestration/service.js";
 import { assertNotMainBranch } from "../src/orchestration/workspace-policy.js";
-import { WorkspaceManager } from "../src/orchestration/workspace.js";
+import { WorkspaceManager, createConfiguredWorkspaceManager } from "../src/orchestration/workspace.js";
 import { integrateSubtasks } from "../src/orchestration/integrator.js";
 import { createMockJobReviewer, createRealJobReviewer } from "../src/orchestration/reviewer.js";
 import { createMockTestRunner } from "../src/orchestration/test-runner.js";
@@ -71,6 +71,36 @@ test("workspace manager handles Git errors and explicit idempotent cleanup", asy
     assert.equal(released.state, "released");
     assert.equal((await manager.cleanup(released)).state, "released");
     await assert.rejects(() => manager.cleanup({ ...workspace, workspace_path: root }), /outside the allowed root/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("mock workspace mode does not require Git in a container", async () => {
+  const { root } = await fixture();
+  try {
+    const manager = new WorkspaceManager({
+      rootDir: join(root, "mock-workspaces"),
+      repoRoot: root,
+      allowedRoot: root,
+      useGit: false,
+      git: async () => { throw Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" }); }
+    });
+    const workspace = await manager.create({ jobId: "job-mock", subtaskId: "backend-1", baseRef: "stage4-mcp" });
+    assert.equal(workspace.state, "ready");
+    assert.match(workspace.workspace_path, /mock-workspaces/);
+    const released = await manager.cleanup(workspace);
+    assert.equal(released.state, "released");
+
+    const configured = createConfiguredWorkspaceManager({
+      env: {
+        ORCHESTRATION_AGENT_MODE: "mock",
+        ORCHESTRATION_REPO_ROOT: root,
+        ORCHESTRATION_ALLOWED_ROOT: root,
+        ORCHESTRATION_WORKSPACE_ROOT: join(root, "configured-mock-workspaces")
+      }
+    });
+    const configuredWorkspace = await configured.create({ jobId: "job-configured", subtaskId: "qa-1", baseRef: "stage4-mcp" });
+    assert.equal(configuredWorkspace.state, "ready");
+    await configured.cleanup(configuredWorkspace);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

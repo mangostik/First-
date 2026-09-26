@@ -126,7 +126,7 @@ Provider requests have independent 120-second defaults. `PROVIDER_MAX_RETRIES=1`
 
 Set `MCP_PATH_TOKEN` and `ORCHESTRATION_TRACKER_TOKEN` only as deployment secrets; never commit their values. The production smoke test checks `/health`, authenticated `/tracker`, MCP initialization, `tools/list`, and `orchestrator_status` without calling external model providers.
 
-The current image is not a production real-runner image: it does not contain a Git repository or workspace root. Worktree isolation and the real runner require a separately designed worker environment. Job state is local JSON storage and can disappear after a restart or redeploy.
+The current image is not a production real-runner image: it does not contain a Git repository or workspace root. In `mock` agent mode, subtasks receive retained directory-only workspace descriptors and do not invoke Git; worktree isolation and the real runner require a separately designed worker environment. Job state is local JSON storage and can disappear after a restart or redeploy.
 
 ### MCP access protection
 

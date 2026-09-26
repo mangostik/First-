@@ -30,11 +30,12 @@ async function defaultGit(args, options = {}) {
 }
 
 export class WorkspaceManager {
-  constructor({ rootDir, repoRoot, allowedRoot, git = defaultGit } = {}) {
+  constructor({ rootDir, repoRoot, allowedRoot, git = defaultGit, useGit = true } = {}) {
     this.repoRoot = resolve(repoRoot || process.cwd());
     this.allowedRoot = resolve(allowedRoot || dirname(this.repoRoot));
     this.rootDir = resolve(rootDir || `${this.repoRoot}/.orchestration-workspaces`);
     this.git = git;
+    this.useGit = useGit;
     if (!isWithin(this.allowedRoot, this.rootDir)) throw new Error("workspace root must be inside the allowed root");
     if (!isWithin(this.allowedRoot, this.repoRoot)) throw new Error("repository root must be inside the allowed root");
     if (this.rootDir === this.repoRoot) throw new Error("workspace root cannot be the repository root");
@@ -68,6 +69,10 @@ export class WorkspaceManager {
       base_ref: String(baseRef),
       state: "creating"
     };
+    if (!this.useGit) {
+      descriptor.state = "ready";
+      return descriptor;
+    }
     try {
       await this.git(["worktree", "add", "-b", branch, workspacePath, String(baseRef)], { cwd: this.repoRoot });
       descriptor.state = "ready";
@@ -98,7 +103,7 @@ export class WorkspaceManager {
       if (error.code === "ENOENT") return { ...workspace, state: "released" };
       throw error;
     }
-    await this.git(["worktree", "remove", "--force", workspacePath], { cwd: this.repoRoot });
+    if (this.useGit) await this.git(["worktree", "remove", "--force", workspacePath], { cwd: this.repoRoot });
     await rm(workspacePath, { recursive: true, force: true });
     return { ...workspace, state: "released" };
   }
@@ -113,5 +118,6 @@ export function createConfiguredWorkspaceManager({ env = process.env } = {}) {
   const repoRoot = resolve(env.ORCHESTRATION_REPO_ROOT || resolve(process.cwd(), ".."));
   const allowedRoot = resolve(env.ORCHESTRATION_ALLOWED_ROOT || repoRoot);
   const rootDir = resolve(env.ORCHESTRATION_WORKSPACE_ROOT || `${repoRoot}/.orchestration-workspaces`);
-  return new WorkspaceManager({ rootDir, repoRoot, allowedRoot });
+  const useGit = String(env.ORCHESTRATION_AGENT_MODE || "mock").trim().toLowerCase() !== "mock";
+  return new WorkspaceManager({ rootDir, repoRoot, allowedRoot, useGit });
 }
