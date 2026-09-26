@@ -1,4 +1,5 @@
 import { extractJson, normalizeAgentResponse } from "../protocol.js";
+import { isRetryableProviderError, requestWithTimeout, waitBeforeRetry } from "./http.js";
 
 const AGENT_RESPONSE_SCHEMA = {
   type: "object",
@@ -23,33 +24,38 @@ function collectOutputText(data) {
     .join("\n");
 }
 
-async function requestOnce({ apiKey, model, prompt, maxOutputTokens, timeoutMs }) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        input: prompt,
-        max_output_tokens: maxOutputTokens,
-        store: false,
-        text: {
-          format: {
-            type: "json_schema",
-            name: "agent_review",
-            strict: true,
-            schema: AGENT_RESPONSE_SCHEMA
+async function requestOnce({ apiKey, model, prompt, maxOutputTokens, timeoutMs, signal, maxRetries = 1 }) {
+  const attempts = Math.max(1, Number(maxRetries) + 1);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await requestWithTimeout({
+        provider: "OpenAI", timeoutMs, signal,
+        request: async requestSignal => {
+          const response = await fetch("https://api.openai.com/v1/responses", {
+            method: "POST",
+            headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model, input: prompt, max_output_tokens: maxOutputTokens, store: false,
+              text: { format: { type: "json_schema", name: "agent_review", strict: true, schema: AGENT_RESPONSE_SCHEMA } }
+            }),
+            signal: requestSignal
+          });
+          if (!response.ok) {
+            const error = new Error("OpenAI API error " + response.status + ": " + await response.text());
+            error.status = response.status;
+            error.retryable = isRetryableProviderError({ status: response.status });
+            throw error;
           }
+          return response.json();
         }
-      }),
-      signal: controller.signal
-    });
-    if (!response.ok) throw new Error("OpenAI API error " + response.status + ": " + await response.text());
-    return response.json();
-  } finally {
-    clearTimeout(timeout);
+      });
+    } catch (error) {
+      if (!isRetryableProviderError(error) || attempt >= attempts) {
+        error.message = `${error.message} (OpenAI request attempt ${attempt}/${attempts})`;
+        throw error;
+      }
+      await waitBeforeRetry({ attempt, signal });
+    }
   }
 }
 
@@ -57,14 +63,15 @@ export function computeRetryTokenLimit(maxOutputTokens) {
   return Math.max(maxOutputTokens, Math.min(maxOutputTokens * 2, 8000));
 }
 
-export async function askOpenAI({ apiKey, model, prompt, maxOutputTokens, timeoutMs }) {
+export async function askOpenAI({ apiKey, model, prompt, maxOutputTokens, timeoutMs, signal, maxRetries = 1, maxStructuredRetries = 1 }) {
   if (!apiKey) throw new Error("OPENAI_API_KEY is required");
   if (!model) throw new Error("OPENAI_MODEL is required");
 
   let lastError;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  const structuredAttempts = Math.max(1, Number(maxStructuredRetries) + 1);
+  for (let attempt = 1; attempt <= structuredAttempts; attempt += 1) {
     const tokenLimit = attempt === 1 ? maxOutputTokens : computeRetryTokenLimit(maxOutputTokens);
-    const data = await requestOnce({ apiKey, model, prompt, maxOutputTokens: tokenLimit, timeoutMs });
+    const data = await requestOnce({ apiKey, model, prompt, maxOutputTokens: tokenLimit, timeoutMs, signal, maxRetries });
     const text = collectOutputText(data);
 
     if (data.status === "incomplete") {
