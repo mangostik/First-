@@ -1,5 +1,7 @@
 import { askClaude } from "./providers/claude.js";
 import { askOpenAI } from "./providers/openai.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   fetchGitHubDiff,
   fetchGitHubPullRequestDiff,
@@ -8,6 +10,10 @@ import {
   validatePositiveInteger
 } from "./github.js";
 import { isConsensus, RESPONSE_SCHEMA_HINT } from "./protocol.js";
+import { failureResult } from "./review-result.js";
+import { createReviewEventEmitter, runProviderReviewLoop } from "./review-loop.js";
+
+const processStartedAt = Date.now();
 
 const env = process.env;
 const config = {
@@ -20,9 +26,21 @@ const config = {
   githubBase: env.GITHUB_BASE || "",
   githubHead: env.GITHUB_HEAD || "",
   githubPrNumber: env.GITHUB_PR_NUMBER ? Number(env.GITHUB_PR_NUMBER) : null,
-  maxRounds: Number(env.MAX_ROUNDS || 3),
-  maxOutputTokens: Number(env.MAX_OUTPUT_TOKENS || 1800),
-  timeoutMs: Number(env.REQUEST_TIMEOUT_MS || 120000),
+  reviewMode: String(env.REVIEW_MODE || "cheap").trim().toLowerCase(),
+  maxRounds: Number(env.REVIEW_MAX_ROUNDS || env.MAX_ROUNDS || 3),
+  maxProviderCalls: Number(env.REVIEW_MAX_PROVIDER_CALLS || (String(env.REVIEW_MODE || "cheap").trim().toLowerCase() === "cheap" ? 8 : 12)),
+  maxOutputTokens: Number(env.REVIEW_MAX_OUTPUT_TOKENS || env.MAX_OUTPUT_TOKENS || 1200),
+  reviewMaxChunks: Number(env.REVIEW_MAX_CHUNKS || (String(env.REVIEW_MODE || "cheap").trim().toLowerCase() === "cheap" ? 4 : 0)),
+  reviewTimeBudgetMs: Number(env.REVIEW_TIME_BUDGET_MS || env.REVIEW_LOOP_TIMEOUT_MS || 600000),
+  costBudgetUsd: Number(env.REVIEW_COST_BUDGET_USD || 0.5),
+  estimatedCostPer1kTokensUsd: Number(env.REVIEW_ESTIMATED_COST_PER_1K_TOKENS_USD || 0.01),
+  requestTimeoutMs: Number(env.REQUEST_TIMEOUT_MS || 120000),
+  claudeTimeoutMs: Number(env.CLAUDE_REQUEST_TIMEOUT_MS || env.REQUEST_TIMEOUT_MS || 120000),
+  openaiTimeoutMs: Number(env.OPENAI_REQUEST_TIMEOUT_MS || env.REQUEST_TIMEOUT_MS || 120000),
+  providerMaxRetries: Number(env.PROVIDER_MAX_RETRIES || 1),
+  structuredMaxRetries: Number(env.STRUCTURED_MAX_RETRIES || 1),
+  reviewLoopTimeoutMs: Number(env.REVIEW_LOOP_TIMEOUT_MS || 600000),
+  reviewLoopGuardMs: Number(env.REVIEW_LOOP_GUARD_MS || 1000),
   maxDiffChars: Number(env.MAX_DIFF_CHARS || 20000),
   maxDiffTotalBytes: Number(env.MAX_DIFF_TOTAL_BYTES || 250000)
 };
@@ -127,7 +145,7 @@ async function loadOptionalDiffChunks() {
       repo: config.githubRepo,
       prNumber: config.githubPrNumber,
       token: config.githubToken,
-      timeoutMs: config.timeoutMs,
+      timeoutMs: config.requestTimeoutMs,
       maxBytes: config.maxDiffTotalBytes
     });
   } else {
@@ -143,63 +161,12 @@ async function loadOptionalDiffChunks() {
       base: github.base,
       head: github.head,
       token: config.githubToken,
-      timeoutMs: config.timeoutMs,
+      timeoutMs: config.requestTimeoutMs,
       maxBytes: config.maxDiffTotalBytes
     });
   }
 
   return splitDiffIntoChunks(raw, config.maxDiffChars);
-}
-
-async function reviewChunk({ task, diff, chunkIndex, chunkCount }) {
-  let lastOpenAI = null;
-  const transcript = [];
-
-  for (let round = 1; round <= config.maxRounds; round++) {
-    const claude = await askClaude({
-      apiKey: config.anthropicApiKey,
-      model: config.anthropicModel,
-      prompt: claudePrompt({ task, diff, chunkIndex, chunkCount, round, openaiReview: lastOpenAI }),
-      maxOutputTokens: config.maxOutputTokens,
-      timeoutMs: config.timeoutMs
-    });
-
-    const openai = await askOpenAI({
-      apiKey: config.openaiApiKey,
-      model: config.openaiModel,
-      prompt: openaiPrompt({ task, diff, chunkIndex, chunkCount, round, claudeResponse: claude }),
-      maxOutputTokens: config.maxOutputTokens,
-      timeoutMs: config.timeoutMs
-    });
-
-    transcript.push({ round, claude, openai });
-
-    if (isConsensus(claude, openai)) {
-      return { final_status: "CONSENSUS", rounds: round, decision: openai, transcript };
-    }
-
-    if (claude.status === "blocked" && openai.status === "blocked") {
-      return { final_status: "BLOCKED", rounds: round, decision: openai, transcript };
-    }
-
-    lastOpenAI = openai;
-  }
-
-  if (lastOpenAI && lastOpenAI.status === "blocked") {
-    return {
-      final_status: "BLOCKED",
-      rounds: config.maxRounds,
-      decision: lastOpenAI,
-      transcript
-    };
-  }
-
-  return {
-    final_status: "FINAL_DECISION",
-    rounds: config.maxRounds,
-    decision: lastOpenAI,
-    transcript
-  };
 }
 
 function unique(items) {
@@ -214,7 +181,7 @@ function chunkSummary(results) {
   }));
 }
 
-async function synthesizeChunkResults({ task, results }) {
+async function synthesizeChunkResults({ task, results, signal, callProvider }) {
   const prompt = [
     "You are OpenAI acting as the final cross-chunk arbiter.",
     "The GitHub diff was too large for a single review and was reviewed in multiple chunks.",
@@ -238,13 +205,16 @@ async function synthesizeChunkResults({ task, results }) {
     jsonRule()
   ].join("\n");
 
-  return askOpenAI({
+  return callProvider("OpenAI", providerSignal => askOpenAI({
     apiKey: config.openaiApiKey,
     model: config.openaiModel,
     prompt,
     maxOutputTokens: config.maxOutputTokens,
-    timeoutMs: config.timeoutMs
-  });
+    timeoutMs: config.openaiTimeoutMs,
+    signal: providerSignal || signal,
+    maxRetries: config.providerMaxRetries,
+    maxStructuredRetries: config.structuredMaxRetries
+  }), { phase: "synthesis" });
 }
 
 function aggregateChunkResults(results, synthesis = null) {
@@ -304,6 +274,44 @@ function aggregateChunkResults(results, synthesis = null) {
 async function main() {
   const task = readTaskFromArgs();
   let chunks = [];
+  const reviewEvents = [];
+  const progressFile = process.env.REVIEW_PROGRESS_FILE || "";
+  const startedAt = processStartedAt;
+  let totalChunks = 0;
+  const writeCheckpoint = data => {
+    if (!progressFile) return;
+    const payload = {
+      final_status: data.final_status || "IN_PROGRESS",
+      ready_to_merge: false,
+      chunks_reviewed: data.chunks_reviewed ?? data.partial_result?.mandatory_completed ?? 0,
+      chunks_total: data.chunks_total ?? totalChunks,
+      coverage_complete: data.coverage_complete === true,
+      elapsed_ms: Date.now() - startedAt,
+      last_provider: data.last_provider || null,
+      last_chunk: data.last_chunk || null,
+      last_round: data.last_round || null,
+      events: reviewEvents,
+      partial_result: data.partial_result || null
+    };
+    try {
+      mkdirSync(dirname(progressFile), { recursive: true });
+      writeFileSync(progressFile, JSON.stringify(payload), "utf8");
+    } catch {}
+  };
+  const { emit: appendEvent } = createReviewEventEmitter({
+    events: reviewEvents,
+    write: line => process.stderr.write("[review-event] " + line)
+  });
+  const emit = event => {
+    const result = appendEvent(event);
+    writeCheckpoint({
+      last_provider: result.provider || null,
+      last_chunk: result.chunk || null,
+      last_round: result.round || null,
+      chunks_total: totalChunks
+    });
+    return result;
+  };
 
   try {
     chunks = await loadOptionalDiffChunks();
@@ -325,40 +333,74 @@ async function main() {
         chunks_total: 0,
         transcript: []
       }, null, 2) + "\n");
+      writeCheckpoint({
+        final_status: "BLOCKED",
+        chunks_reviewed: 0,
+        chunks_total: 0,
+        coverage_complete: false,
+        partial_result: null
+      });
       return;
     }
     throw error;
   }
 
-  const reviewChunks = chunks.length ? chunks : [""];
-  const chunkResults = [];
-
-  for (let index = 0; index < reviewChunks.length; index++) {
-    const result = await reviewChunk({
+  const allReviewChunks = chunks.length ? chunks : [""];
+  const maxChunks = config.reviewMaxChunks > 0 ? config.reviewMaxChunks : allReviewChunks.length;
+  const reviewChunks = allReviewChunks.slice(0, maxChunks);
+  totalChunks = allReviewChunks.length;
+  writeCheckpoint({ chunks_total: totalChunks });
+  let chunkResults;
+  let synthesis;
+  let usage;
+  try {
+    ({ chunkResults, synthesis, usage } = await runProviderReviewLoop({
       task,
-      diff: reviewChunks[index],
-      chunkIndex: index + 1,
-      chunkCount: reviewChunks.length
-    });
-    chunkResults.push({ chunk: index + 1, ...result });
+      chunks: reviewChunks,
+      config: { ...config, totalChunks },
+      promptBuilders: { claude: claudePrompt, openai: openaiPrompt },
+      synthesize: synthesizeChunkResults,
+      isConsensus,
+      emit
+    }));
+  } catch (error) {
+    error.reviewEvents = reviewEvents;
+    throw error;
   }
-
-  const synthesis = chunkResults.length > 1
-    ? await synthesizeChunkResults({ task, results: chunkResults })
-    : null;
   const aggregate = aggregateChunkResults(chunkResults, synthesis);
-
-  process.stdout.write(JSON.stringify({
+  const result = {
     ...aggregate,
     diff_loaded: chunks.length > 0,
     chunks_reviewed: chunkResults.length,
-    chunks_total: reviewChunks.length,
+    chunks_total: totalChunks,
+    coverage_complete: reviewChunks.length === totalChunks,
+    usage: usage || null,
     synthesis,
+    events: reviewEvents,
     transcript: chunkResults
-  }, null, 2) + "\n");
+  };
+  writeCheckpoint({
+    final_status: result.final_status,
+    chunks_reviewed: result.chunks_reviewed,
+    chunks_total: result.chunks_total,
+    coverage_complete: result.coverage_complete,
+    partial_result: null
+  });
+  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
 }
 
 main().catch(error => {
   console.error(error && error.stack ? error.stack : String(error));
+  const result = failureResult(error, { partial: error.partialResult });
+  if (process.env.REVIEW_PROGRESS_FILE) {
+    try {
+      mkdirSync(dirname(process.env.REVIEW_PROGRESS_FILE), { recursive: true });
+      writeFileSync(process.env.REVIEW_PROGRESS_FILE, JSON.stringify({
+        ...result,
+        elapsed_ms: Date.now() - processStartedAt
+      }), "utf8");
+    } catch {}
+  }
+  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
   process.exitCode = 1;
 });
