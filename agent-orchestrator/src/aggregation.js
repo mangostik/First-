@@ -24,10 +24,12 @@ export function aggregateChunkResults(results, synthesis = null, coverageComplet
     synthesis.ready_to_merge === true &&
     (!Array.isArray(synthesis.critical_issues) || synthesis.critical_issues.length === 0)
   );
-  const finalStatus = !coverageComplete
-    ? "FINAL_DECISION"
-    : hasBlocked
-      ? "BLOCKED"
+  // An objective blocker must never be downgraded just because coverage is
+  // incomplete. Keep BLOCKED visible to downstream policy/adjudication.
+  const finalStatus = hasBlocked
+    ? "BLOCKED"
+    : !coverageComplete
+      ? "FINAL_DECISION"
       : allConsensus && allReady && criticalIssues.length === 0 && synthesisAgrees
         ? "CONSENSUS"
         : "FINAL_DECISION";

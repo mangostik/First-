@@ -15,6 +15,25 @@ test("incomplete coverage can never produce ready_to_merge", () => {
   assert.equal(result.decision.ready_to_merge, false);
 });
 
+test("incomplete coverage preserves an explicit BLOCKED result", () => {
+  const result = aggregateChunkResults([
+    {
+      final_status: "BLOCKED",
+      rounds: 1,
+      decision: {
+        status: "blocked",
+        ready_to_merge: false,
+        critical_issues: ["provider failure"],
+        recommended_changes: [],
+        evidence: ["provider=Claude"]
+      }
+    }
+  ], null, false);
+  assert.equal(result.final_status, "BLOCKED");
+  assert.equal(result.decision.status, "blocked");
+  assert.equal(result.decision.ready_to_merge, false);
+});
+
 test("progress JSON is replaced atomically and remains valid", async () => {
   const directory = await mkdtemp(join(tmpdir(), "review-progress-"));
   const filePath = join(directory, "progress.json");
