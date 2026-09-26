@@ -32,6 +32,15 @@ ANTHROPIC_MODEL=claude-sonnet-4-5
 Optional controls:
 
 ```text
+REVIEW_MODE=cheap
+REVIEW_MAX_CHUNKS=4
+REVIEW_MAX_ROUNDS=1
+REVIEW_MAX_PROVIDER_CALLS=8
+REVIEW_MAX_OUTPUT_TOKENS=1200
+REVIEW_TIME_BUDGET_MS=240000
+REVIEW_COST_BUDGET_USD=0.50
+REVIEW_ESTIMATED_COST_PER_1K_TOKENS_USD=0.01
+# Legacy aliases remain supported for deep/manual compatibility.
 MAX_ROUNDS=3
 MAX_OUTPUT_TOKENS=1800
 REQUEST_TIMEOUT_MS=120000
@@ -78,7 +87,9 @@ does not open a port. The HTTP listener starts only through `npm run start:mcp`,
 which preserves `/health`, MCP initialization, and the registered tool set.
 
 The Claude/OpenAI review loop uses 120-second per-request timeouts plus a
-600-second `REVIEW_LOOP_TIMEOUT_MS` deadline for the complete provider loop. The loop makes one mandatory Claude/OpenAI round for every diff chunk first, then revisits only chunks with unresolved findings. `REVIEW_LOOP_GUARD_MS` reserves time before starting another provider request; if the remaining deadline is too short, the loop stops and preserves the partial structured result with `ready_to_merge=false`.
+Review cost is controlled by `REVIEW_MODE`, `REVIEW_MAX_CHUNKS`, `REVIEW_MAX_ROUNDS`, `REVIEW_MAX_PROVIDER_CALLS`, `REVIEW_MAX_OUTPUT_TOKENS`, `REVIEW_TIME_BUDGET_MS` and `REVIEW_COST_BUDGET_USD`. `cheap` is the default: Claude reviews each selected chunk once, OpenAI checks only concrete findings and performs the final adjudication. `standard` keeps the same Claude pass but allows OpenAI checks on risky chunks. `deep` retains the full legacy Claude/OpenAI round structure and should be enabled manually. Every structured result includes redacted usage metrics; stopping on a provider-call, chunk, time, or estimated-cost limit returns `final_status=COST_LIMIT`, a partial result, and `ready_to_merge=false`.
+
+The provider loop also retains a `REVIEW_LOOP_TIMEOUT_MS` deadline for compatibility. `REVIEW_LOOP_GUARD_MS` reserves time before starting another provider request; if the remaining deadline is too short, the loop stops and preserves the partial structured result with `ready_to_merge=false`.
 Structured `provider_started`, `provider_completed`, `provider_timeout`,
 `provider_error`, and `review_loop_aborted` events are emitted without secrets.
 

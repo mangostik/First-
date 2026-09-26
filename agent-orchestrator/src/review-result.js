@@ -3,6 +3,7 @@ export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0, even
   const code = error?.code || "REVIEW_ERROR";
   const status = ["PROVIDER_TIMEOUT", "REVIEW_LOOP_TIMEOUT", "MCP_REVIEW_TIMEOUT"].includes(code)
     ? "TIMEOUT"
+    : code === "COST_LIMIT" ? "COST_LIMIT"
     : ["PROVIDER_ABORTED", "MCP_REVIEW_CANCELLED"].includes(code) ? "CANCELLED" : "FAILED";
   const reason = String(error?.message || error || "Unknown review failure");
   const lastProviderEvent = [...events].reverse().find(event => event?.provider);
@@ -21,6 +22,7 @@ export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0, even
     last_chunk: partial?.last_chunk || lastProviderEvent?.chunk || null,
     last_round: partial?.last_round || lastProviderEvent?.round || null,
     elapsed_ms: partial?.elapsed_ms ?? null,
+    usage: partial?.usage || null,
     partial_result: partial,
     decision: {
       status: "blocked",

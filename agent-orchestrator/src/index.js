@@ -26,8 +26,14 @@ const config = {
   githubBase: env.GITHUB_BASE || "",
   githubHead: env.GITHUB_HEAD || "",
   githubPrNumber: env.GITHUB_PR_NUMBER ? Number(env.GITHUB_PR_NUMBER) : null,
-  maxRounds: Number(env.MAX_ROUNDS || 3),
-  maxOutputTokens: Number(env.MAX_OUTPUT_TOKENS || 1800),
+  reviewMode: String(env.REVIEW_MODE || "cheap").trim().toLowerCase(),
+  maxRounds: Number(env.REVIEW_MAX_ROUNDS || env.MAX_ROUNDS || 3),
+  maxProviderCalls: Number(env.REVIEW_MAX_PROVIDER_CALLS || (String(env.REVIEW_MODE || "cheap").trim().toLowerCase() === "cheap" ? 8 : 12)),
+  maxOutputTokens: Number(env.REVIEW_MAX_OUTPUT_TOKENS || env.MAX_OUTPUT_TOKENS || 1200),
+  reviewMaxChunks: Number(env.REVIEW_MAX_CHUNKS || (String(env.REVIEW_MODE || "cheap").trim().toLowerCase() === "cheap" ? 4 : 0)),
+  reviewTimeBudgetMs: Number(env.REVIEW_TIME_BUDGET_MS || env.REVIEW_LOOP_TIMEOUT_MS || 600000),
+  costBudgetUsd: Number(env.REVIEW_COST_BUDGET_USD || 0.5),
+  estimatedCostPer1kTokensUsd: Number(env.REVIEW_ESTIMATED_COST_PER_1K_TOKENS_USD || 0.01),
   requestTimeoutMs: Number(env.REQUEST_TIMEOUT_MS || 120000),
   claudeTimeoutMs: Number(env.CLAUDE_REQUEST_TIMEOUT_MS || env.REQUEST_TIMEOUT_MS || 120000),
   openaiTimeoutMs: Number(env.OPENAI_REQUEST_TIMEOUT_MS || env.REQUEST_TIMEOUT_MS || 120000),
@@ -339,16 +345,19 @@ async function main() {
     throw error;
   }
 
-  const reviewChunks = chunks.length ? chunks : [""];
-  totalChunks = reviewChunks.length;
+  const allReviewChunks = chunks.length ? chunks : [""];
+  const maxChunks = config.reviewMaxChunks > 0 ? config.reviewMaxChunks : allReviewChunks.length;
+  const reviewChunks = allReviewChunks.slice(0, maxChunks);
+  totalChunks = allReviewChunks.length;
   writeCheckpoint({ chunks_total: totalChunks });
   let chunkResults;
   let synthesis;
+  let usage;
   try {
-    ({ chunkResults, synthesis } = await runProviderReviewLoop({
+    ({ chunkResults, synthesis, usage } = await runProviderReviewLoop({
       task,
       chunks: reviewChunks,
-      config,
+      config: { ...config, totalChunks },
       promptBuilders: { claude: claudePrompt, openai: openaiPrompt },
       synthesize: synthesizeChunkResults,
       isConsensus,
@@ -363,7 +372,9 @@ async function main() {
     ...aggregate,
     diff_loaded: chunks.length > 0,
     chunks_reviewed: chunkResults.length,
-    chunks_total: reviewChunks.length,
+    chunks_total: totalChunks,
+    coverage_complete: reviewChunks.length === totalChunks,
+    usage: usage || null,
     synthesis,
     events: reviewEvents,
     transcript: chunkResults

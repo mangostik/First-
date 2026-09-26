@@ -149,6 +149,7 @@ test("reviews every chunk once before following up only the problematic chunk", 
   assert.equal(result.chunkResults[0].rounds, 3);
   assert.equal(result.chunkResults[1].rounds, 1);
   assert.equal(result.chunkResults[0].transcript.length, 3);
+  assert.equal(calls.length, 8);
 });
 
 test("insufficient deadline preserves partial results and does not start another provider call", async () => {
@@ -220,4 +221,89 @@ test("provider failure always serializes to valid structured review JSON", () =>
   assert.equal(parsed.decision.ready_to_merge, false);
   assert.equal(parsed.error.provider, "OpenAI");
   assert.ok(Array.isArray(parsed.transcript));
+});
+
+function cheapLoopConfig(overrides = {}) {
+  return loopConfig({
+    reviewMode: "cheap",
+    totalChunks: 2,
+    maxProviderCalls: 8,
+    maxOutputTokens: 100,
+    costBudgetUsd: 10,
+    estimatedCostPer1kTokensUsd: 0.01,
+    ...overrides
+  });
+}
+
+test("cheap mode reviews chunks with Claude and calls OpenAI only for final adjudication when clean", async () => {
+  const calls = [];
+  const result = await runProviderReviewLoop({
+    task: "review", chunks: ["one", "two"], config: cheapLoopConfig(),
+    promptBuilders: { claude: ({ diff }) => `claude:${diff}`, openai: () => "openai" },
+    synthesize: async ({ callProvider }) => callProvider("OpenAI", async () => { calls.push("openai:final"); return agent; }, { phase: "synthesis" }),
+    isConsensus: () => true, emit: () => {},
+    askClaudeFn: async ({ prompt }) => { calls.push(prompt); return agent; },
+    askOpenAIFn: async () => { calls.push("openai:chunk"); return agent; }
+  });
+  assert.deepEqual(calls, ["claude:one", "claude:two", "openai:final"]);
+  assert.equal(result.usage.provider_calls, 3);
+  assert.equal(result.usage.provider_calls_by_provider.OpenAI, 1);
+});
+
+test("cheap mode asks OpenAI to confirm findings and then adjudicate the final result", async () => {
+  const calls = [];
+  const finding = { ...agent, status: "needs_changes", ready_to_merge: false, critical_issues: ["issue"] };
+  const result = await runProviderReviewLoop({
+    task: "review", chunks: ["one"], config: cheapLoopConfig({ totalChunks: 1 }),
+    promptBuilders: { claude: () => "claude", openai: () => "openai" },
+    synthesize: async ({ callProvider }) => callProvider("OpenAI", async () => { calls.push("openai:final"); return agent; }, { phase: "synthesis" }),
+    isConsensus: () => false, emit: () => {},
+    askClaudeFn: async () => { calls.push("claude"); return finding; },
+    askOpenAIFn: async () => { calls.push("openai:finding"); return finding; }
+  });
+  assert.deepEqual(calls, ["claude", "openai:finding", "openai:final"]);
+  assert.equal(result.usage.provider_calls, 3);
+});
+
+test("standard mode checks only risky chunks, while deep keeps the full per-round loop", async () => {
+  const calls = [];
+  const finding = { ...agent, status: "needs_changes", ready_to_merge: false, critical_issues: ["issue"] };
+  await runProviderReviewLoop({
+    task: "review", chunks: ["clean", "risky"], config: cheapLoopConfig({ reviewMode: "standard" }),
+    promptBuilders: { claude: ({ diff }) => diff, openai: () => "openai" },
+    synthesize: async ({ callProvider }) => callProvider("OpenAI", async () => { calls.push("openai:final"); return agent; }, { phase: "synthesis" }),
+    isConsensus: () => true, emit: () => {},
+    askClaudeFn: async ({ prompt }) => { calls.push(`claude:${prompt}`); return prompt === "risky" ? finding : agent; },
+    askOpenAIFn: async () => { calls.push("openai:risky"); return finding; }
+  });
+  assert.deepEqual(calls, ["claude:clean", "claude:risky", "openai:risky", "openai:final"]);
+});
+
+test("provider call limit returns structured COST_LIMIT with incomplete readiness", async () => {
+  await assert.rejects(() => runProviderReviewLoop({
+    task: "review", chunks: ["one"], config: cheapLoopConfig({ totalChunks: 1, maxProviderCalls: 1 }),
+    promptBuilders: { claude: () => "claude", openai: () => "openai" },
+    synthesize: async ({ callProvider }) => callProvider("OpenAI", async () => agent, { phase: "synthesis" }), isConsensus: () => true, emit: () => {},
+    askClaudeFn: async () => agent, askOpenAIFn: async () => agent
+  }), error => {
+    assert.equal(error.code, "COST_LIMIT");
+    const parsed = JSON.parse(JSON.stringify(failureResult(error, { partial: error.partialResult })));
+    assert.equal(parsed.final_status, "COST_LIMIT");
+    assert.equal(parsed.ready_to_merge, false);
+    assert.equal(parsed.usage.provider_calls, 1);
+    return true;
+  });
+});
+
+test("chunk limit stops before claiming complete coverage", async () => {
+  await assert.rejects(() => runProviderReviewLoop({
+    task: "review", chunks: ["one"], config: cheapLoopConfig({ totalChunks: 2 }),
+    promptBuilders: { claude: () => "claude", openai: () => "openai" },
+    synthesize: async () => agent, isConsensus: () => true, emit: () => {},
+    askClaudeFn: async () => agent, askOpenAIFn: async () => agent
+  }), error => {
+    assert.equal(error.code, "COST_LIMIT");
+    assert.equal(error.partialResult.coverage_complete, false);
+    return true;
+  });
 });
