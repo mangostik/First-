@@ -1,12 +1,19 @@
 name: Agent Review
 
 on:
-  push:
-    branches:
-      - stage2-github-diff
-  pull_request_target:
-    types: [opened, synchronize, reopened]
+  # Agent Review is intentionally opt-in: provider calls must never start from
+  # pull request or push events in the base branch.
   workflow_dispatch:
+    inputs:
+      review_mode:
+        description: "Review cost mode"
+        required: false
+        default: cheap
+        type: choice
+        options:
+          - cheap
+          - standard
+          - deep
 
 permissions:
   contents: read
@@ -43,6 +50,11 @@ jobs:
           OPENAI_MODEL: gpt-5.6
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: claude-sonnet-4-5
+          REVIEW_MODE: ${{ inputs.review_mode || 'cheap' }}
+          REVIEW_MAX_CHUNKS: ${{ inputs.review_mode == 'deep' && '0' || '4' }}
+          REVIEW_MAX_ROUNDS: ${{ inputs.review_mode == 'deep' && '3' || '1' }}
+          REVIEW_MAX_PROVIDER_CALLS: ${{ inputs.review_mode == 'deep' && '100' || '8' }}
+          REVIEW_MAX_OUTPUT_TOKENS: ${{ inputs.review_mode == 'deep' && '1800' || '1200' }}
           MAX_ROUNDS: "3"
           MAX_OUTPUT_TOKENS: "1600"
           REQUEST_TIMEOUT_MS: "120000"
