@@ -7,9 +7,13 @@ export function aggregateChunkResults(results, synthesis = null, coverageComplet
   const hasBlocked = results.some(item =>
     item.final_status === "BLOCKED" || item.decision?.status === "blocked"
   ) || synthesis?.status === "blocked";
-  const preservedTerminalStatus = results.find(item =>
-    ["TIMEOUT", "COST_LIMIT", "FAILED"].includes(item.final_status)
-  )?.final_status;
+  // Preserve a concrete terminal cause deterministically. This keeps an
+  // incomplete review actionable instead of replacing TIMEOUT/COST_LIMIT/
+  // FAILED with the generic BLOCKED status.
+  const terminalStatuses = ["TIMEOUT", "COST_LIMIT", "FAILED"];
+  const preservedTerminalStatus = terminalStatuses.find(status =>
+    results.some(item => item.final_status === status)
+  );
   const allConsensus = results.every(item => item.final_status === "CONSENSUS");
   const allReady = decisions.every(item => item.ready_to_merge === true);
   const synthesisDecisions = synthesis ? [...decisions, synthesis] : decisions;
@@ -27,8 +31,6 @@ export function aggregateChunkResults(results, synthesis = null, coverageComplet
     synthesis.ready_to_merge === true &&
     (!Array.isArray(synthesis.critical_issues) || synthesis.critical_issues.length === 0)
   );
-  // An objective blocker must never be downgraded just because coverage is
-  // incomplete. Keep BLOCKED visible to downstream policy/adjudication.
   const finalStatus = preservedTerminalStatus || (
     hasBlocked
       ? "BLOCKED"
