@@ -1,0 +1,13 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+node_modules
+test
+.orchestration-jobs
+.orchestration-workspaces
+*.log
+coverage
+README.md
+ORCHESTRATOR_TZ.md

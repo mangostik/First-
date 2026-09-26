@@ -4,9 +4,19 @@ on:
   push:
     branches:
       - stage2-github-diff
-  pull_request_target:
-    types: [opened, synchronize, reopened]
+  pull_request:
+    types: [opened, reopened]
   workflow_dispatch:
+    inputs:
+      review_mode:
+        description: "Review cost mode"
+        required: false
+        default: cheap
+        type: choice
+        options:
+          - cheap
+          - standard
+          - deep
 
 permissions:
   contents: read
@@ -15,16 +25,16 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: agent-orchestrator
 
     steps:
-      - name: Checkout trusted orchestrator code
+      - name: Checkout review code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.pull_request.base.sha || github.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -43,9 +53,24 @@ jobs:
           OPENAI_MODEL: gpt-5.6
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: claude-sonnet-4-5
+          REVIEW_MODE: ${{ inputs.review_mode || 'cheap' }}
+          REVIEW_MAX_CHUNKS: ${{ inputs.review_mode == 'deep' && '0' || '4' }}
+          REVIEW_MAX_ROUNDS: ${{ inputs.review_mode == 'deep' && '3' || '1' }}
+          REVIEW_MAX_PROVIDER_CALLS: ${{ inputs.review_mode == 'deep' && '100' || '8' }}
+          REVIEW_MAX_OUTPUT_TOKENS: ${{ inputs.review_mode == 'deep' && '1800' || '1200' }}
+          REVIEW_TIME_BUDGET_MS: "240000"
+          REVIEW_COST_BUDGET_USD: "0.50"
+          REVIEW_ESTIMATED_COST_PER_1K_TOKENS_USD: "0.01"
           MAX_ROUNDS: "3"
           MAX_OUTPUT_TOKENS: "1600"
           REQUEST_TIMEOUT_MS: "120000"
+          CLAUDE_REQUEST_TIMEOUT_MS: "120000"
+          OPENAI_REQUEST_TIMEOUT_MS: "120000"
+          PROVIDER_MAX_RETRIES: "1"
+          STRUCTURED_MAX_RETRIES: "1"
+          REVIEW_LOOP_TIMEOUT_MS: "600000"
+          REVIEW_LOOP_GUARD_MS: "1000"
+          REVIEW_PROGRESS_FILE: agent-review-progress.json
           MAX_DIFF_CHARS: "20000"
           MAX_DIFF_TOTAL_BYTES: "250000"
           GITHUB_TOKEN: ${{ github.token }}
@@ -56,16 +81,20 @@ jobs:
         run: |
           test -n "$OPENAI_API_KEY" || { echo "Missing repository secret OPENAI_API_KEY"; exit 1; }
           test -n "$ANTHROPIC_API_KEY" || { echo "Missing repository secret ANTHROPIC_API_KEY"; exit 1; }
+          set -o pipefail
           node src/index.js "Review this GitHub diff. Find only concrete high-impact problems; do not nitpick style." | tee agent-review.json
 
       - name: Upload review result
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-review
-          path: agent-orchestrator/agent-review.json
+          path: |
+            agent-orchestrator/agent-review.json
+            agent-orchestrator/agent-review-progress.json
 
       - name: Post review summary to PR
-        if: github.event_name == 'pull_request_target'
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
