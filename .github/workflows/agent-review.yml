@@ -1,11 +1,6 @@
 name: Agent Review
 
 on:
-  push:
-    branches:
-      - stage2-github-diff
-  pull_request:
-    types: [opened, reopened]
   workflow_dispatch:
     inputs:
       review_mode:
@@ -17,6 +12,10 @@ on:
           - cheap
           - standard
           - deep
+      pr_number:
+        description: "Optional pull request number to review as untrusted diff data"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -34,7 +33,9 @@ jobs:
       - name: Checkout review code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.pull_request.base.sha || github.sha }}
+          # Provider-bearing code must come only from the trusted base branch.
+          # PR contents are fetched separately as untrusted diff data.
+          ref: stage4-mcp
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -75,9 +76,9 @@ jobs:
           MAX_DIFF_TOTAL_BYTES: "250000"
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPO: ${{ github.repository }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
-          GITHUB_BASE: ${{ github.event.pull_request.number && '' || 'stage1-agent-orchestrator' }}
-          GITHUB_HEAD: ${{ github.event.pull_request.number && '' || github.ref_name }}
+          GITHUB_PR_NUMBER: ${{ inputs.pr_number || '' }}
+          GITHUB_BASE: ${{ inputs.pr_number && '' || 'stage4-mcp' }}
+          GITHUB_HEAD: ${{ inputs.pr_number && '' || github.ref_name }}
         run: |
           test -n "$OPENAI_API_KEY" || { echo "Missing repository secret OPENAI_API_KEY"; exit 1; }
           test -n "$ANTHROPIC_API_KEY" || { echo "Missing repository secret ANTHROPIC_API_KEY"; exit 1; }
@@ -94,7 +95,7 @@ jobs:
             agent-orchestrator/agent-review-progress.json
 
       - name: Post review summary to PR
-        if: always() && github.event_name == 'pull_request'
+        if: false
         uses: actions/github-script@v7
         with:
           script: |

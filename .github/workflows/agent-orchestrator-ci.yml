@@ -48,18 +48,7 @@ jobs:
         timeout-minutes: 2
         shell: bash
         run: |
-          set -o pipefail
-          log_file="$(mktemp)"
-          set +e
-          timeout --kill-after=5s 60s node --test --test-concurrency=1 test/mcp-tools.test.js 2>&1 | tee "$log_file"
-          status=${PIPESTATUS[0]}
-          if grep -q '^ℹ fail 0$' "$log_file" && grep -q '^ℹ tests ' "$log_file"; then
-            if [ "$status" -eq 124 ]; then
-              echo "MCP assertions passed; stopping the test worker left open by the imported HTTP server."
-              exit 0
-            fi
-          fi
-          exit "$status"
+          timeout --kill-after=5s 60s node --test --test-concurrency=1 test/mcp-tools.test.js
 
       - name: Run orchestration tests
         run: node --test test/orchestration.test.js
@@ -93,18 +82,7 @@ jobs:
         timeout-minutes: 3
         shell: bash
         run: |
-          set -o pipefail
-          log_file="$(mktemp)"
-          set +e
-          timeout --kill-after=5s 90s npm test 2>&1 | tee "$log_file"
-          status=${PIPESTATUS[0]}
-          if grep -q '^ℹ fail 0$' "$log_file" && grep -q '^ℹ tests ' "$log_file"; then
-            if [ "$status" -eq 124 ]; then
-              echo "npm test assertions passed; stopping the worker left open by the imported MCP HTTP server."
-              exit 0
-            fi
-          fi
-          exit "$status"
+          timeout --kill-after=5s 90s npm test
 
       - name: Check JavaScript syntax
         shell: bash

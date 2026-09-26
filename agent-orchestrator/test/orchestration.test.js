@@ -104,6 +104,20 @@ test("mock workspace mode does not require Git in a container", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("workspace default path is portable on Linux and Windows", async () => {
+  const root = await mkdtemp(join(tmpdir(), "fishcrm-orchestrator-default-root-"));
+  try {
+    const manager = createConfiguredWorkspaceManager({
+      env: {
+        ORCHESTRATION_AGENT_MODE: "mock",
+        ORCHESTRATION_REPO_ROOT: root,
+        ORCHESTRATION_ALLOWED_ROOT: root
+      }
+    });
+    assert.equal(manager.rootDir, join(root, ".orchestration-workspaces"));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("job store writes and reads atomically shaped JSON jobs", async () => {
   const { root, store } = await fixture();
   try {

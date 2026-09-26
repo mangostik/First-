@@ -135,6 +135,8 @@ ORCHESTRATION_JOB_TIMEOUT_MS=300000
 
 Provider requests have independent 120-second defaults. `PROVIDER_MAX_RETRIES=1` bounds retryable 429/5xx responses, while `STRUCTURED_MAX_RETRIES=1` bounds invalid or incomplete structured-output retries. Timeouts and cancellations produce a valid structured failure JSON result, which is uploaded and can be summarized without a secondary JSON parse failure.
 
+Agent Review security boundary: the workflow executes reviewer code only from the trusted `stage4-mcp` ref. Pull request contents are retrieved with the GitHub API and embedded as explicitly untrusted diff data; they are never checked out or executed in the provider-bearing process. Provider secrets are therefore not passed to PR-branch code. Test command timeouts remain failures and must not be converted into successful CI results.
+
 Set `MCP_PATH_TOKEN` and `ORCHESTRATION_TRACKER_TOKEN` only as deployment secrets; never commit their values. The production smoke test checks `/health`, authenticated `/tracker`, MCP initialization, `tools/list`, and `orchestrator_status` without calling external model providers.
 
 The current image is not a production real-runner image: it does not contain a Git repository or workspace root. In `mock` agent mode, subtasks receive retained directory-only workspace descriptors and do not invoke Git; worktree isolation and the real runner require a separately designed worker environment. Job state is local JSON storage and can disappear after a restart or redeploy.

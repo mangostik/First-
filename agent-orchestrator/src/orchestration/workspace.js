@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { access, mkdir, rm } from "node:fs/promises";
 import { promisify } from "node:util";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const execFileAsync = promisify(execFile);
 const SAFE_ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -117,7 +117,7 @@ export class WorkspaceManager {
 export function createConfiguredWorkspaceManager({ env = process.env } = {}) {
   const repoRoot = resolve(env.ORCHESTRATION_REPO_ROOT || resolve(process.cwd(), ".."));
   const allowedRoot = resolve(env.ORCHESTRATION_ALLOWED_ROOT || repoRoot);
-  const rootDir = resolve(env.ORCHESTRATION_WORKSPACE_ROOT || `${repoRoot}/.orchestration-workspaces`);
+  const rootDir = resolve(env.ORCHESTRATION_WORKSPACE_ROOT || join(repoRoot, ".orchestration-workspaces"));
   const useGit = String(env.ORCHESTRATION_AGENT_MODE || "mock").trim().toLowerCase() !== "mock";
   return new WorkspaceManager({ rootDir, repoRoot, allowedRoot, useGit });
 }
