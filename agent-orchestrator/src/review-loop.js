@@ -5,10 +5,12 @@ function errorMeta(error) {
   return { code: error?.code || "REVIEW_ERROR", message: String(error?.message || error || "Unknown review error").slice(0, 500) };
 }
 
-export function createReviewEventEmitter({ events = [], write = null } = {}) {
+export function createReviewEventEmitter({ events = [], write = null, maxEvents = 1000 } = {}) {
+  const limit = Math.max(1, Number(maxEvents) || 1000);
   const emit = event => {
     const safeEvent = { timestamp: new Date().toISOString(), ...event };
     events.push(safeEvent);
+    if (events.length > limit) events.splice(0, events.length - limit);
     if (write) write(JSON.stringify(safeEvent) + "\n");
     return safeEvent;
   };

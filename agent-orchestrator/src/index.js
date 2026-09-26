@@ -1,7 +1,6 @@
 import { askClaude } from "./providers/claude.js";
 import { askOpenAI } from "./providers/openai.js";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { writeAtomicJson } from "./progress.js";
 import {
   fetchGitHubDiff,
   fetchGitHubPullRequestDiff,
@@ -12,6 +11,7 @@ import {
 import { isConsensus, RESPONSE_SCHEMA_HINT } from "./protocol.js";
 import { failureResult } from "./review-result.js";
 import { createReviewEventEmitter, runProviderReviewLoop } from "./review-loop.js";
+import { aggregateChunkResults } from "./aggregation.js";
 
 const processStartedAt = Date.now();
 
@@ -41,6 +41,7 @@ const config = {
   structuredMaxRetries: Number(env.STRUCTURED_MAX_RETRIES || 1),
   reviewLoopTimeoutMs: Number(env.REVIEW_LOOP_TIMEOUT_MS || 600000),
   reviewLoopGuardMs: Number(env.REVIEW_LOOP_GUARD_MS || 1000),
+  maxReviewEvents: Number(env.REVIEW_MAX_EVENTS || 1000),
   maxDiffChars: Number(env.MAX_DIFF_CHARS || 20000),
   maxDiffTotalBytes: Number(env.MAX_DIFF_TOTAL_BYTES || 250000)
 };
@@ -169,10 +170,6 @@ async function loadOptionalDiffChunks() {
   return splitDiffIntoChunks(raw, config.maxDiffChars);
 }
 
-function unique(items) {
-  return [...new Set(items.filter(Boolean))];
-}
-
 function chunkSummary(results) {
   return results.map(item => ({
     chunk: item.chunk,
@@ -217,59 +214,6 @@ async function synthesizeChunkResults({ task, results, signal, callProvider }) {
   }), { phase: "synthesis" });
 }
 
-function aggregateChunkResults(results, synthesis = null) {
-  const decisions = results.map(item => item.decision || {});
-  const hasBlocked = results.some(item =>
-    item.final_status === "BLOCKED" || item.decision?.status === "blocked"
-  ) || synthesis?.status === "blocked";
-  const allConsensus = results.every(item => item.final_status === "CONSENSUS");
-  const allReady = decisions.every(item => item.ready_to_merge === true);
-
-  const synthesisDecisions = synthesis ? [...decisions, synthesis] : decisions;
-  const criticalIssues = unique(synthesisDecisions.flatMap(item =>
-    Array.isArray(item.critical_issues) ? item.critical_issues : []
-  ));
-  const recommendedChanges = unique(synthesisDecisions.flatMap(item =>
-    Array.isArray(item.recommended_changes) ? item.recommended_changes : []
-  ));
-  const evidence = unique(synthesisDecisions.flatMap(item =>
-    Array.isArray(item.evidence) ? item.evidence : []
-  ));
-
-  const synthesisAgrees = !synthesis || (
-    synthesis.status === "agree" &&
-    synthesis.ready_to_merge === true &&
-    (!Array.isArray(synthesis.critical_issues) || synthesis.critical_issues.length === 0)
-  );
-
-  const finalStatus = hasBlocked
-    ? "BLOCKED"
-    : (
-        allConsensus &&
-        allReady &&
-        criticalIssues.length === 0 &&
-        synthesisAgrees
-          ? "CONSENSUS"
-          : "FINAL_DECISION"
-      );
-
-  return {
-    final_status: finalStatus,
-    rounds: results.reduce((sum, item) => sum + (item.rounds || 0), 0),
-    decision: {
-      status: finalStatus === "CONSENSUS" ? "agree" : (hasBlocked ? "blocked" : "needs_changes"),
-      critical_issues: criticalIssues,
-      recommended_changes: recommendedChanges,
-      ready_to_merge: finalStatus === "CONSENSUS",
-      evidence
-    },
-    combined: {
-      critical_issues: criticalIssues,
-      recommended_changes: recommendedChanges,
-      evidence
-    }
-  };
-}
 
 async function main() {
   const task = readTaskFromArgs();
@@ -294,12 +238,12 @@ async function main() {
       partial_result: data.partial_result || null
     };
     try {
-      mkdirSync(dirname(progressFile), { recursive: true });
-      writeFileSync(progressFile, JSON.stringify(payload), "utf8");
+      writeAtomicJson(progressFile, payload);
     } catch {}
   };
   const { emit: appendEvent } = createReviewEventEmitter({
     events: reviewEvents,
+    maxEvents: config.maxReviewEvents,
     write: line => process.stderr.write("[review-event] " + line)
   });
   const emit = event => {
@@ -367,13 +311,14 @@ async function main() {
     error.reviewEvents = reviewEvents;
     throw error;
   }
-  const aggregate = aggregateChunkResults(chunkResults, synthesis);
+  const coverageComplete = reviewChunks.length === totalChunks;
+  const aggregate = aggregateChunkResults(chunkResults, synthesis, coverageComplete);
   const result = {
     ...aggregate,
     diff_loaded: chunks.length > 0,
     chunks_reviewed: chunkResults.length,
     chunks_total: totalChunks,
-    coverage_complete: reviewChunks.length === totalChunks,
+    coverage_complete: coverageComplete,
     usage: usage || null,
     synthesis,
     events: reviewEvents,
@@ -394,11 +339,10 @@ main().catch(error => {
   const result = failureResult(error, { partial: error.partialResult });
   if (process.env.REVIEW_PROGRESS_FILE) {
     try {
-      mkdirSync(dirname(process.env.REVIEW_PROGRESS_FILE), { recursive: true });
-      writeFileSync(process.env.REVIEW_PROGRESS_FILE, JSON.stringify({
+      writeAtomicJson(process.env.REVIEW_PROGRESS_FILE, {
         ...result,
         elapsed_ms: Date.now() - processStartedAt
-      }), "utf8");
+      });
     } catch {}
   }
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");
