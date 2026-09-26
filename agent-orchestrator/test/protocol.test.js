@@ -41,3 +41,24 @@ test("askClaude retries once after unstructured output", async () => {
     global.fetch = originalFetch;
   }
 });
+
+test("askClaude never converts an aborted retry into a successful-looking result", async () => {
+  const originalFetch = global.fetch;
+  let calls = 0;
+  global.fetch = async (_url, options) => {
+    calls += 1;
+    if (calls === 1) return response("plain text");
+    const error = new Error("aborted");
+    error.name = "AbortError";
+    throw error;
+  };
+  try {
+    await assert.rejects(
+      askClaude({ apiKey: "test", model: "test", prompt: "review", maxOutputTokens: 100, timeoutMs: 1000 }),
+      error => error.name === "AbortError"
+    );
+    assert.equal(calls, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

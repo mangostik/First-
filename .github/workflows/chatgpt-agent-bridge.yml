@@ -19,7 +19,8 @@ jobs:
       - name: Checkout request commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          # Requests are accepted only on the trusted stage4-mcp branch.
+          ref: stage4-mcp
           fetch-depth: 2
 
       - name: Set up Node
@@ -82,6 +83,8 @@ jobs:
           MAX_DIFF_CHARS: "20000"
           MAX_DIFF_TOTAL_BYTES: "250000"
           GITHUB_TOKEN: ${{ github.token }}
+          ORCHESTRATION_TRUSTED_REF: stage4-mcp
+          ORCHESTRATION_WORKSPACE_ROOT: ${{ github.workspace }}
         run: |
           mkdir -p ../.agent-results
           node src/index.js "$AGENT_TASK" > "../.agent-results/$AGENT_REQUEST_ID.json"

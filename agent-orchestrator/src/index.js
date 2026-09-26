@@ -8,6 +8,7 @@ import {
   validatePositiveInteger
 } from "./github.js";
 import { isConsensus, RESPONSE_SCHEMA_HINT } from "./protocol.js";
+import { assertTrustedWorkspace } from "./workspace.js";
 
 const env = process.env;
 const config = {
@@ -302,6 +303,7 @@ function aggregateChunkResults(results, synthesis = null) {
 }
 
 async function main() {
+  assertTrustedWorkspace();
   const task = readTaskFromArgs();
   let chunks = [];
 

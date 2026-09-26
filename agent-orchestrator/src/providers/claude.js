@@ -21,13 +21,22 @@ export async function askClaude({ apiKey, model, prompt, maxOutputTokens, timeou
     const text = await requestClaude({ apiKey, model, prompt, maxOutputTokens, signal: controller.signal });
     try {
       return normalizeAgentResponse(extractJson(text));
-    } catch {
+    } catch (error) {
+      // A timeout/abort is a failed review, never a structured "blocked"
+      // result. Only a completed but malformed response may enter recovery.
+      if (error?.name === "AbortError" || error?.code === "ABORT_ERR") throw error;
       const retryPrompt = [
         prompt,
         "",
         "FORMAT RECOVERY: Return one JSON object only. Do not use prose, Markdown, code fences, or explanations outside that object."
       ].join("\n");
-      const retryText = await requestClaude({ apiKey, model, prompt: retryPrompt, maxOutputTokens, signal: controller.signal });
+      let retryText;
+      try {
+        retryText = await requestClaude({ apiKey, model, prompt: retryPrompt, maxOutputTokens, signal: controller.signal });
+      } catch (retryError) {
+        if (retryError?.name === "AbortError" || retryError?.code === "ABORT_ERR") throw retryError;
+        throw retryError;
+      }
       try {
         return normalizeAgentResponse(extractJson(retryText));
       } catch {

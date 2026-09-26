@@ -1,12 +1,13 @@
 name: Agent Review
 
 on:
-  push:
-    branches:
-      - stage2-github-diff
   pull_request_target:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+
+concurrency:
+  group: agent-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -14,6 +15,7 @@ permissions:
 
 jobs:
   review:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request_target' && github.event.pull_request.base.ref == 'stage4-mcp'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -24,7 +26,8 @@ jobs:
       - name: Checkout trusted orchestrator code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          # Never checkout PR code: the PR is fetched below as diff data only.
+          ref: stage4-mcp
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -53,6 +56,8 @@ jobs:
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
           GITHUB_BASE: ${{ github.event.pull_request.number && '' || 'stage1-agent-orchestrator' }}
           GITHUB_HEAD: ${{ github.event.pull_request.number && '' || github.ref_name }}
+          ORCHESTRATION_TRUSTED_REF: stage4-mcp
+          ORCHESTRATION_WORKSPACE_ROOT: ${{ github.workspace }}
         run: |
           test -n "$OPENAI_API_KEY" || { echo "Missing repository secret OPENAI_API_KEY"; exit 1; }
           test -n "$ANTHROPIC_API_KEY" || { echo "Missing repository secret ANTHROPIC_API_KEY"; exit 1; }

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildReviewEnv } from "../src/mcp-runner.js";
+import { buildReviewEnv, assertTrustedReviewSource, runAgentReview } from "../src/mcp-runner.js";
+import { resolveWorkspaceRoot, assertTrustedWorkspace } from "../src/workspace.js";
 
 test("buildReviewEnv maps PR context without leaking stale branch selectors", () => {
   const env = buildReviewEnv(
@@ -25,4 +26,30 @@ test("buildReviewEnv maps branch comparison context", () => {
   assert.equal(env.GITHUB_BASE, "main");
   assert.equal(env.GITHUB_HEAD, "feature");
   assert.equal(env.GITHUB_PR_NUMBER, undefined);
+});
+
+test("reviewer rejects an explicitly untrusted source", () => {
+  assert.throws(
+    () => assertTrustedReviewSource({ ORCHESTRATION_TRUSTED_REF: "pull-request" }),
+    error => error.code === "UNTRUSTED_REVIEW_SOURCE"
+  );
+});
+
+test("CI reviewer must declare stage4-mcp", () => {
+  assert.throws(
+    () => assertTrustedReviewSource({ CI: "true" }),
+    error => error.code === "UNTRUSTED_REVIEW_SOURCE"
+  );
+  assert.doesNotThrow(() => assertTrustedReviewSource({ CI: "true", ORCHESTRATION_TRUSTED_REF: "stage4-mcp" }));
+});
+
+test("workspace root is resolved from the Linux runner workspace", () => {
+  const root = resolveWorkspaceRoot("review-workspace");
+  assert.equal(root, resolveWorkspaceRoot(root));
+  assert.ok(root.endsWith("review-workspace"));
+  assert.doesNotThrow(() => assertTrustedWorkspace({ ORCHESTRATION_TRUSTED_REF: "stage4-mcp" }));
+});
+
+test("invalid timeout cannot be treated as a successful review", () => {
+  assert.throws(() => runAgentReview({ task: "review" }, { timeoutMs: 0 }), /timeoutMs must be positive/);
 });
