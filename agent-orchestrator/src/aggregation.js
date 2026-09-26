@@ -14,8 +14,6 @@ export function aggregateChunkResults(results, synthesis = null, coverageComplet
   const preservedTerminalStatus = terminalStatuses.find(status =>
     results.some(item => item.final_status === status)
   );
-  const allConsensus = results.every(item => item.final_status === "CONSENSUS");
-  const allReady = decisions.every(item => item.ready_to_merge === true);
   const synthesisDecisions = synthesis ? [...decisions, synthesis] : decisions;
   const criticalIssues = unique(synthesisDecisions.flatMap(item =>
     Array.isArray(item.critical_issues) ? item.critical_issues : []
@@ -27,27 +25,28 @@ export function aggregateChunkResults(results, synthesis = null, coverageComplet
     Array.isArray(item.evidence) ? item.evidence : []
   ));
   const synthesisAgrees = !synthesis || (
-    synthesis.status === "agree" &&
+    ["agree", "approved"].includes(synthesis.status) &&
     synthesis.ready_to_merge === true &&
     (!Array.isArray(synthesis.critical_issues) || synthesis.critical_issues.length === 0)
   );
+  const reviewerApproved = decisions.length > 0 &&
+    decisions.every(item => ["agree", "approved"].includes(item.status) && item.ready_to_merge === true) &&
+    synthesisAgrees && criticalIssues.length === 0;
   const finalStatus = preservedTerminalStatus || (
-    hasBlocked
-      ? "BLOCKED"
-      : !coverageComplete
-        ? "BLOCKED"
-        : allConsensus && allReady && criticalIssues.length === 0 && synthesisAgrees
-          ? "CONSENSUS"
-          : "FINAL_DECISION"
+    !coverageComplete ? "BLOCKED" : "FINAL_DECISION"
   );
+  const readyToMerge = coverageComplete &&
+    !preservedTerminalStatus &&
+    !hasBlocked &&
+    reviewerApproved;
   return {
     final_status: finalStatus,
     rounds: results.reduce((sum, item) => sum + (item.rounds || 0), 0),
     decision: {
-      status: finalStatus === "CONSENSUS" ? "agree" : (hasBlocked ? "blocked" : "needs_changes"),
+      status: readyToMerge ? "agree" : (hasBlocked ? "blocked" : "needs_changes"),
       critical_issues: criticalIssues,
       recommended_changes: recommendedChanges,
-      ready_to_merge: coverageComplete && finalStatus === "CONSENSUS",
+      ready_to_merge: readyToMerge,
       evidence: coverageComplete ? evidence : unique([
         ...evidence,
         "Review coverage is incomplete; approval is blocked until every chunk is reviewed."

@@ -35,9 +35,25 @@ test("incomplete coverage without a terminal status falls back to BLOCKED", () =
   assert.notEqual(result.final_status, "FINAL_DECISION");
 });
 
-test("complete coverage may retain FINAL_DECISION", () => {
+test("complete coverage with reviewer approval is merge-ready", () => {
+  const result = aggregateChunkResults([
+    { final_status: "CONSENSUS", rounds: 1, decision: { status: "agree", ready_to_merge: true, critical_issues: [], recommended_changes: [], evidence: [] } }
+  ], null, true);
+  assert.equal(result.final_status, "FINAL_DECISION");
+  assert.equal(result.decision.ready_to_merge, true);
+});
+
+test("complete coverage with reviewer needs_changes is not merge-ready", () => {
   const result = aggregateChunkResults([
     { final_status: "REVIEWED", rounds: 1, decision: { status: "needs_changes", ready_to_merge: false, critical_issues: ["finding"], recommended_changes: [], evidence: [] } }
+  ], null, true);
+  assert.equal(result.final_status, "FINAL_DECISION");
+  assert.equal(result.decision.ready_to_merge, false);
+});
+
+test("complete coverage with reviewer blocked is not merge-ready", () => {
+  const result = aggregateChunkResults([
+    { final_status: "BLOCKED", rounds: 1, decision: { status: "blocked", ready_to_merge: false, critical_issues: ["blocked"], recommended_changes: [], evidence: [] } }
   ], null, true);
   assert.equal(result.final_status, "FINAL_DECISION");
   assert.equal(result.decision.ready_to_merge, false);
