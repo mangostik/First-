@@ -46,6 +46,7 @@
 - [x] Оптимизирован review loop: один обязательный раунд по всем chunks, follow-up только для проблемных chunks, guard перед новым provider call и partial result при неполном покрытии; `ready_to_merge=false` до полного покрытия.
 - [x] Deterministic mock runner для тестов.
 - [x] Cost-aware review modes: `cheap` по умолчанию, `standard` для рискованных chunks и ручной `deep`; лимиты chunks/provider calls/output tokens/time/estimated cost, redacted usage metrics и structured `COST_LIMIT` partial result.
+- [x] Reviewer hardening: неполное покрытие всегда блокирует `ready_to_merge`, progress checkpoint записывается атомарно, а `reviewEvents` ограничен `REVIEW_MAX_EVENTS`.
 - [x] Реальный параллельный запуск двух независимых agent tasks через текущий scheduler с default `concurrency=2`.
 - [x] Real runner получает отдельный workspace descriptor каждой подзадачи; автоматический merge отсутствует.
 - [x] Opt-in real-runner smoke test добавлен и отключён по умолчанию.
