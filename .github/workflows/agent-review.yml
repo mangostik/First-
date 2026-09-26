@@ -34,9 +34,6 @@ jobs:
   review:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: agent-orchestrator
 
     steps:
       - name: Validate trusted reviewer ref
@@ -67,15 +64,24 @@ jobs:
           # PR contents are fetched separately as untrusted diff data.
           ref: stage4-mcp
 
+      - name: Validate orchestrator workspace layout
+        run: |
+          set -eu
+          test -f agent-orchestrator/package.json || { echo "Missing agent-orchestrator/package.json" >&2; exit 1; }
+          test -f agent-orchestrator/src/index.js || { echo "Missing agent-orchestrator/src/index.js" >&2; exit 1; }
+          test -d agent-orchestrator/test || { echo "Missing agent-orchestrator/test" >&2; exit 1; }
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "24"
 
       - name: Install dependencies without lifecycle scripts
+        working-directory: agent-orchestrator
         run: npm install --ignore-scripts
 
       - name: Run tests without API secrets
+        working-directory: agent-orchestrator
         run: npm test
 
       - name: Run Claude + OpenAI review
@@ -109,6 +115,7 @@ jobs:
           GITHUB_PR_NUMBER: ${{ inputs.pull_request_number || inputs.pr_number || '' }}
           GITHUB_BASE: stage4-mcp
           GITHUB_HEAD: ${{ github.ref_name }}
+        working-directory: agent-orchestrator
         run: |
           test -n "$OPENAI_API_KEY" || { echo "Missing repository secret OPENAI_API_KEY"; exit 1; }
           test -n "$ANTHROPIC_API_KEY" || { echo "Missing repository secret ANTHROPIC_API_KEY"; exit 1; }

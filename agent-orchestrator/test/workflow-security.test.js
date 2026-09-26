@@ -20,10 +20,18 @@ test("Agent Review is manual-only and exposes safe dispatch inputs", () => {
 test("trusted ref validation precedes checkout and provider secrets", () => {
   const validation = workflow.indexOf("Validate trusted reviewer ref");
   const checkout = workflow.indexOf("Checkout trusted reviewer code");
+  const layout = workflow.indexOf("Validate orchestrator workspace layout");
   const secrets = workflow.indexOf("OPENAI_API_KEY:");
   assert.ok(validation >= 0);
   assert.ok(validation < checkout);
+  assert.ok(checkout < layout);
+  assert.ok(layout < secrets);
   assert.ok(checkout < secrets);
   assert.match(workflow, /refs\/heads\/stage4-mcp/);
   assert.match(workflow, /REVIEW_REF.*stage4-mcp/);
+  assert.doesNotMatch(workflow, /defaults:\s*\n\s+run:\s*\n\s+working-directory:/);
+  assert.match(workflow, /working-directory: agent-orchestrator/);
+  assert.match(workflow, /agent-orchestrator\/package\.json/);
+  assert.match(workflow, /agent-orchestrator\/src\/index\.js/);
+  assert.match(workflow, /agent-orchestrator\/test/);
 });
