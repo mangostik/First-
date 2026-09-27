@@ -117,8 +117,8 @@
 - [x] Cancellation state/already-aborted signal: подтверждённый edge case. Cancellation marker очищается после обработки, `withTestTimeout` учитывает уже отменённый parent signal.
 - [x] Workspace cleanup: подтверждённый edge case. Cleanup применяет ту же нормализацию `main` refs, что и создание workspace.
 - [x] Tracker cookie: подтверждённое hardening-замечание. Cookie теперь получает `Secure` по умолчанию с явным env override только для локального HTTP.
-- [x] Исправления `75bd116` перенесены в существующий PR #7 без отдельного PR: итоговый head `b4f735c` содержит исходный PR7 (`04afb62`) и hardening-изменения.
-- [x] Agent Orchestrator CI push #45 и pull request #46 зелёные на `b4f735c`; staging deployment для этого SHA завершился успешно.
+- [x] Исправления `75bd116` перенесены в существующий PR #7 без отдельного PR; итоговая ветка содержит исходный PR7 (`04afb62`) и hardening-изменения.
+- [x] Agent Orchestrator CI для актуальных checkpoints проходит по push и pull request; staging deployment для последнего проверенного кода завершался успешно.
 - [ ] Авторизованный staging MCP smoke остаётся незавершённым: режимы и токены не проверены, production deployment не разрешён.
 
 Все изменения ограничены подтверждёнными сценариями; security-модель trusted reviewer, ручной workflow и legacy MCP-инструменты не менялись. Авторизованный staging MCP smoke остаётся незавершённым и блокирует production deployment.
