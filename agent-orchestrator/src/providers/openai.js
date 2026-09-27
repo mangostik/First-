@@ -24,10 +24,11 @@ function collectOutputText(data) {
     .join("\n");
 }
 
-async function requestOnce({ apiKey, model, prompt, maxOutputTokens, timeoutMs, signal, maxRetries = 1 }) {
+async function requestOnce({ apiKey, model, prompt, maxOutputTokens, timeoutMs, signal, maxRetries = 1, onAttempt, reasoningEffort }) {
   const attempts = Math.max(1, Number(maxRetries) + 1);
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
+      onAttempt?.({ maxOutputTokens });
       return await requestWithTimeout({
         provider: "OpenAI", timeoutMs, signal,
         request: async requestSignal => {
@@ -36,12 +37,13 @@ async function requestOnce({ apiKey, model, prompt, maxOutputTokens, timeoutMs, 
             headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
             body: JSON.stringify({
               model, input: prompt, max_output_tokens: maxOutputTokens, store: false,
+              ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
               text: { format: { type: "json_schema", name: "agent_review", strict: true, schema: AGENT_RESPONSE_SCHEMA } }
             }),
             signal: requestSignal
           });
           if (!response.ok) {
-            const error = new Error("OpenAI API error " + response.status + ": " + await response.text());
+            const error = new Error("OpenAI API error " + response.status);
             error.status = response.status;
             error.retryable = isRetryableProviderError({ status: response.status });
             throw error;
@@ -63,7 +65,7 @@ export function computeRetryTokenLimit(maxOutputTokens) {
   return Math.max(maxOutputTokens, Math.min(maxOutputTokens * 2, 8000));
 }
 
-export async function askOpenAI({ apiKey, model, prompt, maxOutputTokens, timeoutMs, signal, maxRetries = 1, maxStructuredRetries = 1 }) {
+export async function askOpenAI({ apiKey, model, prompt, maxOutputTokens, timeoutMs, signal, maxRetries = 1, maxStructuredRetries = 1, onAttempt, reasoningEffort }) {
   if (!apiKey) throw new Error("OPENAI_API_KEY is required");
   if (!model) throw new Error("OPENAI_MODEL is required");
 
@@ -71,13 +73,15 @@ export async function askOpenAI({ apiKey, model, prompt, maxOutputTokens, timeou
   const structuredAttempts = Math.max(1, Number(maxStructuredRetries) + 1);
   for (let attempt = 1; attempt <= structuredAttempts; attempt += 1) {
     const tokenLimit = attempt === 1 ? maxOutputTokens : computeRetryTokenLimit(maxOutputTokens);
-    const data = await requestOnce({ apiKey, model, prompt, maxOutputTokens: tokenLimit, timeoutMs, signal, maxRetries });
+    const retryPrompt = attempt === 1 ? prompt : `${prompt}\n\nFORMAT RECOVERY: Be concise. Return only the required JSON fields; keep each issue and evidence item short.`;
+    const data = await requestOnce({ apiKey, model, prompt: retryPrompt, maxOutputTokens: tokenLimit, timeoutMs, signal, maxRetries, onAttempt, reasoningEffort });
     const text = collectOutputText(data);
 
     if (data.status === "incomplete") {
       lastError = new Error(
         "OpenAI response incomplete: " + JSON.stringify(data.incomplete_details || null)
       );
+      lastError.code = "OPENAI_INCOMPLETE_OUTPUT";
       continue;
     }
 

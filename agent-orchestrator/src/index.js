@@ -202,7 +202,7 @@ async function synthesizeChunkResults({ task, results, signal, callProvider }) {
     jsonRule()
   ].join("\n");
 
-  return callProvider("OpenAI", providerSignal => askOpenAI({
+  return callProvider("OpenAI", (providerSignal, onAttempt) => askOpenAI({
     apiKey: config.openaiApiKey,
     model: config.openaiModel,
     prompt,
@@ -210,7 +210,9 @@ async function synthesizeChunkResults({ task, results, signal, callProvider }) {
     timeoutMs: config.openaiTimeoutMs,
     signal: providerSignal || signal,
     maxRetries: config.providerMaxRetries,
-    maxStructuredRetries: config.structuredMaxRetries
+    maxStructuredRetries: config.structuredMaxRetries,
+    reasoningEffort: "low",
+    onAttempt
   }), { phase: "synthesis" });
 }
 
@@ -305,7 +307,15 @@ async function main() {
       promptBuilders: { claude: claudePrompt, openai: openaiPrompt },
       synthesize: synthesizeChunkResults,
       isConsensus,
-      emit
+      emit,
+      onProgress: partial => writeCheckpoint({
+        chunks_reviewed: partial.chunkResults.length,
+        chunks_total: partial.chunks_total,
+        last_provider: partial.last_provider,
+        last_chunk: partial.last_chunk,
+        last_round: partial.last_round,
+        partial_result: partial
+      })
     }));
   } catch (error) {
     error.reviewEvents = reviewEvents;
