@@ -92,7 +92,7 @@ export class OrchestrationService {
       this.schedulers.set(jobId, scheduler);
       let job = await scheduler.run(jobId);
       if (job.status === "cancelled" || this.cancelled.has(jobId)) return;
-      const hardLimitFailure = job.limit_violations?.some(item => ["max_subtasks", "concurrency", "job_timeout"].includes(item.code));
+      const hardLimitFailure = job.limit_violations?.some(item => ["max_subtasks", "concurrency", "job_timeout", "subtask_timeout"].includes(item.code));
       if (job.status === "failed" && hardLimitFailure) {
         await this.saveFailureResult(jobId, job.error || job.limit_violations.at(-1).code);
         return;

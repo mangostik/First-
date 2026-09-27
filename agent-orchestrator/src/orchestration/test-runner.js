@@ -52,7 +52,8 @@ export function withTestTimeout(runner, timeoutMs = 120000) {
     async run(context = {}) {
       const controller = new AbortController();
       const onAbort = () => controller.abort();
-      context.signal?.addEventListener("abort", onAbort, { once: true });
+      if (context.signal?.aborted) controller.abort(context.signal.reason);
+      else context.signal?.addEventListener("abort", onAbort, { once: true });
       const started = Date.now();
       let timer;
       try {

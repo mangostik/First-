@@ -34,8 +34,16 @@ export function runAgentReview(input, options = {}) {
   const task = String(input?.task || "").trim();
   if (!task) throw new Error("task is required");
 
-  const requestedTimeoutMs = options.timeoutMs ?? 15 * 60 * 1000;
-  const deadlineMs = options.deadlineMs ?? Number(process.env.MCP_REVIEW_DEADLINE_MS || 240000);
+  const positiveTimeout = (value, fallback, name) => {
+    const number = Number(value);
+    if (!Number.isFinite(number) || number <= 0) {
+      if (value === undefined || value === null || value === "") return fallback;
+      throw new Error(`${name} must be a finite positive number`);
+    }
+    return number;
+  };
+  const requestedTimeoutMs = positiveTimeout(options.timeoutMs, 15 * 60 * 1000, "timeoutMs");
+  const deadlineMs = positiveTimeout(options.deadlineMs ?? process.env.MCP_REVIEW_DEADLINE_MS, 240000, "deadlineMs");
   const timeoutMs = Math.min(requestedTimeoutMs, deadlineMs);
   const maxBuffer = options.maxBuffer ?? 5 * 1024 * 1024;
   const ownsProgressFile = !options.progressFile;

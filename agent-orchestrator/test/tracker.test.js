@@ -81,5 +81,6 @@ test("tracker rejects unauthorized, invalid and unknown jobs without leaking tok
     await tracker.handle(request(`/api/jobs/${job.job_id}`, { authorization: "Bearer tracker-secret" }), detail);
     assert.equal(detail.body.includes("ghp_secret-token"), false);
     assert.equal(detail.headers["Set-Cookie"].includes("tracker-secret"), true);
+    assert.match(detail.headers["Set-Cookie"], /Secure/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -107,5 +107,18 @@
 - [x] В полном локальном test suite обнаружена и исправлена нестабильность SSE-теста: ожидание события теперь ограничено дедлайном, а stream закрывается в `finally`.
 - [ ] Merge PR #7, production deployment и реальные provider calls остаются отдельными решениями; test gate и CI обязательны перед обсуждением merge.
 
+### Адресный аудит восьми findings Agent Review #92
+
+- [x] Tracker authorization: ложное срабатывание. `mcp-server.js` передаёт tracker первым, но `ReadOnlyTracker.handle` сам проверяет bearer/cookie до store/API операций; добавлена regression-проверка Secure cookie.
+- [x] Runner timeout/cancel: подтверждённый риск. Scheduler теперь не освобождает active slot до settle runner, не продолжает pipeline после timeout и не повторяет timed-out attempt; добавлен regression-тест с runner, игнорирующим AbortSignal.
+- [x] `JsonJobStore.update`: подтверждённый дефект. Результат updater теперь повторно валидируется и не может изменить `job_id`; добавлен regression-тест.
+- [x] Numeric limits/deadlines: подтверждённый edge case. Некорректный explicit MCP deadline отклоняется до запуска child process; scheduler использует конечные безопасные fallback-значения.
+- [x] Dependency/deadlock race: подтверждённый риск. Dependency updates выполняются через актуальный serialized store snapshot, а deadlock проверяется после повторного чтения состояния.
+- [x] Cancellation state/already-aborted signal: подтверждённый edge case. Cancellation marker очищается после обработки, `withTestTimeout` учитывает уже отменённый parent signal.
+- [x] Workspace cleanup: подтверждённый edge case. Cleanup применяет ту же нормализацию `main` refs, что и создание workspace.
+- [x] Tracker cookie: подтверждённое hardening-замечание. Cookie теперь получает `Secure` по умолчанию с явным env override только для локального HTTP.
+
+Все изменения ограничены подтверждёнными сценариями; security-модель trusted reviewer, ручной workflow и legacy MCP-инструменты не менялись. Авторизованный staging MCP smoke остаётся незавершённым и блокирует production deployment.
+
 
 Этап observability/limits и read-only web tracker реализованы и подтверждены зелёными CI runs #12/#13. Этап расширения role registry и Planner routing завершён и подтверждён зелёными CI runs #14 (push) и #15 (pull request). Production hardening подготовлен; merge/deployment не выполнялись. Provider review теперь поддерживает cost-aware режимы `cheap`/`standard`/`deep`: по умолчанию Claude делает один проход, OpenAI подключается только к findings и финальному adjudication, а provider calls, chunks, output tokens, time и estimated cost ограничены конфигурацией. Лимиты возвращают structured `COST_LIMIT` с usage metrics, partial result и `ready_to_merge=false`; mock CI не выполняет реальные provider calls. Автоматический review убран с `pull_request.synchronize`, поэтому review не повторяется на каждый push; `deep` доступен только через ручной `workflow_dispatch`. Существующий deadline/AbortSignal/retry/structured recovery path сохранён. MCP-level deadline `MCP_REVIEW_DEADLINE_MS=240000`, checkpoint прогресса и asynchronous orchestration tools остаются без изменений. Production deployment остаётся отдельным этапом и требует явного подтверждения.

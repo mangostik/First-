@@ -2,6 +2,10 @@ import { isTerminal } from "./statuses.js";
 import { addEvent, addLimitViolation, durationMs, markState, safeLog } from "./observability.js";
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const finiteAtLeast = (value, fallback, minimum) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(minimum, number) : fallback;
+};
 
 export class DependencyScheduler {
   constructor({ store, runner, maxParallel = 3, timeoutMs = 30_000, maxRetries = 1, jobTimeoutMs = 300_000, logEvents = false } = {}) {
@@ -9,10 +13,10 @@ export class DependencyScheduler {
     this.store = store;
     this.runner = typeof runner === "function" ? runner : runner?.run?.bind(runner);
     if (!this.runner) throw new Error("runner must be a function or adapter with run()");
-    this.maxParallel = Math.max(1, Math.min(3, Number(maxParallel)));
-    this.timeoutMs = Math.max(1, Number(timeoutMs));
-    this.maxRetries = Math.max(0, Number(maxRetries));
-    this.jobTimeoutMs = Math.max(1, Number(jobTimeoutMs));
+    this.maxParallel = Math.min(3, finiteAtLeast(maxParallel, 3, 1));
+    this.timeoutMs = finiteAtLeast(timeoutMs, 30_000, 1);
+    this.maxRetries = finiteAtLeast(maxRetries, 1, 0);
+    this.jobTimeoutMs = finiteAtLeast(jobTimeoutMs, 300_000, 1);
     this.logEvents = Boolean(logEvents);
     this.active = new Map();
     this.cancelled = new Set();
@@ -24,11 +28,7 @@ export class DependencyScheduler {
 
   async cancel(jobId) {
     this.cancelled.add(jobId);
-    const activePromises = this.activeFor(jobId).map(entry => {
-      entry.controller.abort();
-      return entry.promise;
-    });
-    await Promise.allSettled(activePromises);
+    for (const entry of this.activeFor(jobId)) entry.controller.abort();
     await this.store.update(jobId, job => {
       if (job.status === "completed" || job.status === "failed") return job;
       job.status = "cancelled";
@@ -47,6 +47,7 @@ export class DependencyScheduler {
       }
       return job;
     });
+    this.cancelled.delete(jobId);
     return this.store.get(jobId);
   }
 
@@ -75,27 +76,31 @@ export class DependencyScheduler {
     while (true) {
       let job = await this.store.get(jobId);
       if (job.status === "cancelled" || this.cancelled.has(jobId)) return job;
+      if (job.status === "failed") return job;
       if (Date.now() - started >= this.jobTimeoutMs) {
         return this.failForLimit(jobId, "job_timeout", { limit_ms: this.jobTimeoutMs });
       }
 
-      const byId = new Map(job.subtasks.map(subtask => [subtask.id, subtask]));
-      let changed = false;
-      for (const subtask of job.subtasks) {
-        if (subtask.status !== "waiting") continue;
-        const dependencies = subtask.dependencies.map(dep => byId.get(dep.subtask_id));
-        if (dependencies.some(dep => dep?.status === "failed" || dep?.status === "cancelled")) {
-          subtask.status = "failed";
-          subtask.error = "dependency_failed";
-          markState(subtask, "failed");
-          addEvent(job, "subtask_failed", { subtask_id: subtask.id, reason: "dependency_failed" });
-          changed = true;
-        } else if (dependencies.every(dep => dep?.status === "completed")) {
-          subtask.status = "queued";
-          changed = true;
+      const dependencyUpdate = await this.store.update(jobId, current => {
+        const byId = new Map(current.subtasks.map(subtask => [subtask.id, subtask]));
+        let changed = false;
+        for (const subtask of current.subtasks) {
+          if (subtask.status !== "waiting") continue;
+          const dependencies = subtask.dependencies.map(dep => byId.get(dep.subtask_id));
+          if (dependencies.some(dep => dep?.status === "failed" || dep?.status === "cancelled")) {
+            subtask.status = "failed";
+            subtask.error = "dependency_failed";
+            markState(subtask, "failed");
+            addEvent(current, "subtask_failed", { subtask_id: subtask.id, reason: "dependency_failed" });
+            changed = true;
+          } else if (dependencies.every(dep => dep?.status === "completed")) {
+            subtask.status = "queued";
+            changed = true;
+          }
         }
-      }
-      if (changed) job = await this.store.write(job);
+        return current;
+      });
+      job = dependencyUpdate;
 
       const queued = job.subtasks.filter(subtask => subtask.status === "queued");
       for (const subtask of queued) {
@@ -108,6 +113,11 @@ export class DependencyScheduler {
       const activeForJob = this.activeFor(jobId);
       if (!unfinished && activeForJob.length === 0) return job;
       if (activeForJob.length === 0 && queued.length === 0) {
+        const latest = await this.store.get(jobId);
+        const latestActive = this.activeFor(jobId);
+        const latestQueued = latest.subtasks.some(subtask => subtask.status === "queued");
+        const latestUnfinished = latest.subtasks.some(subtask => !isTerminal(subtask.status));
+        if (latestUnfinished || latestActive.length > 0 || latestQueued) continue;
         await this.store.update(jobId, current => {
           current.status = "failed";
           current.error = "dependency_deadlock";
@@ -130,12 +140,18 @@ export class DependencyScheduler {
   start(jobId, subtaskId) {
     const controller = new AbortController();
     const key = `${jobId}:${subtaskId}`;
-    const promise = this.execute(jobId, subtaskId, controller)
-      .finally(() => this.active.delete(key));
-    this.active.set(key, { jobId, controller, promise });
+    let resolveSettled;
+    const settledPromise = new Promise(resolve => { resolveSettled = resolve; });
+    const entry = { jobId, controller, promise: null, settledPromise, resolveSettled, runnerPromise: null, runnerSettled: true, executeSettled: false };
+    entry.promise = this.execute(jobId, subtaskId, controller, entry)
+      .finally(() => {
+        entry.executeSettled = true;
+        if (entry.runnerSettled) { entry.resolveSettled(); this.active.delete(key); }
+      });
+    this.active.set(key, entry);
   }
 
-  async execute(jobId, subtaskId, controller) {
+  async execute(jobId, subtaskId, controller, entry) {
     await this.store.update(jobId, job => {
       const subtask = job.subtasks.find(item => item.id === subtaskId);
       if (subtask) {
@@ -176,6 +192,12 @@ export class DependencyScheduler {
         if (controller.signal.aborted) rejectAbort();
         else controller.signal.addEventListener("abort", rejectAbort, { once: true });
         const runnerPromise = Promise.resolve().then(() => this.runner({ job: current, subtask, attempt, signal: attemptController.signal }));
+        entry.runnerPromise = runnerPromise;
+        entry.runnerSettled = false;
+        runnerPromise.then(
+          () => { entry.runnerSettled = true; if (entry.executeSettled) { entry.resolveSettled(); this.active.delete(`${jobId}:${subtaskId}`); } },
+          () => { entry.runnerSettled = true; if (entry.executeSettled) { entry.resolveSettled(); this.active.delete(`${jobId}:${subtaskId}`); } }
+        );
         const result = await Promise.race([
           runnerPromise,
           cancelledAttempt,
@@ -185,6 +207,7 @@ export class DependencyScheduler {
           controller.signal.removeEventListener("abort", abortAttempt);
           controller.signal.removeEventListener("abort", rejectAbort);
         });
+        entry.runnerSettled = true;
         if (result?.status === "failed") throw new Error(result.error || "agent_result_failed");
         if (controller.signal.aborted || this.cancelled.has(jobId)) return;
         await this.store.update(jobId, job => {
@@ -229,6 +252,11 @@ export class DependencyScheduler {
             if (error.message === "timeout") addLimitViolation(job, "subtask_timeout", { subtask_id: subtaskId, limit_ms: this.timeoutMs });
             if (attempt > this.maxRetries) addLimitViolation(job, "max_retries", { subtask_id: subtaskId, max_retries: this.maxRetries });
           }
+          if (error.message === "timeout") {
+            job.status = "failed";
+            job.error = "timeout";
+            markState(job, "failed");
+          }
           return job;
         });
         return;
@@ -239,7 +267,6 @@ export class DependencyScheduler {
   async failForLimit(jobId, code, details = {}) {
     const active = this.activeFor(jobId);
     for (const entry of active) entry.controller.abort();
-    await Promise.allSettled(active.map(entry => entry.promise));
     return this.store.update(jobId, job => {
       addLimitViolation(job, code, details);
       job.status = "failed";

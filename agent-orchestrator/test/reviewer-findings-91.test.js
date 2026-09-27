@@ -105,6 +105,26 @@ test("timed-out runner is signalled and not retried while it may still execute",
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("timed-out runner keeps its active slot quarantined until it settles", async () => {
+  const { root, store } = await fixture();
+  try {
+    const job = await oneTask(store, "quarantine timeout");
+    let finished = false;
+    const scheduler = new DependencyScheduler({ store, maxRetries: 2, timeoutMs: 5, runner: async () => {
+      await delay(40);
+      finished = true;
+      return { status: "completed", summary: "late", changed_files: [], tests: [], warnings: [], error: null };
+    } });
+    const result = await scheduler.run(job.job_id);
+    assert.equal(result.status, "failed");
+    assert.equal(result.error, "timeout");
+    assert.equal(scheduler.activeFor(job.job_id).length, 1);
+    await delay(60);
+    assert.equal(finished, true);
+    assert.equal(scheduler.activeFor(job.job_id).length, 0);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("scheduler options cannot raise configured safety limits", async () => {
   const { root, store, workspaceManager } = await fixture();
   try {
@@ -116,6 +136,16 @@ test("scheduler options cannot raise configured safety limits", async () => {
     assert.ok(service.limits.maxRetries <= 1);
     assert.ok(service.limits.subtaskTimeoutMs <= 30000);
     assert.ok(service.limits.jobTimeoutMs <= 300000);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("job store validates updater output and preserves the requested job id", async () => {
+  const { root, store } = await fixture();
+  try {
+    const job = await oneTask(store, "store integrity");
+    await assert.rejects(() => store.update(job.job_id, current => ({ ...current, job_id: "attacker" })), /cannot change job_id/);
+    assert.equal((await store.get(job.job_id)).job_id, job.job_id);
+    await assert.rejects(() => store.update(job.job_id, () => ({ status: "queued" })), /cannot change job_id/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -161,4 +191,9 @@ test("invalid loop timeout config uses a finite fallback instead of an immediate
   isConsensus: () => true, emit: () => {}, askClaudeFn: async () => { await delay(5); return response; } });
   assert.equal(result.coverageComplete, true);
   assert.equal(result.chunkResults.length, 1);
+});
+
+test("MCP review rejects an invalid explicit deadline before spawning a child", async () => {
+  const { runAgentReview } = await import("../src/mcp-runner.js");
+  assert.throws(() => runAgentReview({ task: "x" }, { deadlineMs: 0 }), /deadlineMs must be a finite positive number/);
 });
