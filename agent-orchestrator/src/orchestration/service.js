@@ -11,7 +11,7 @@ import { createConfiguredTestRunner } from "./test-runner.js";
 import { addEvent, addLimitViolation, durationMs, markState, readOrchestrationLimits, safeLog } from "./observability.js";
 
 export class OrchestrationService {
-  constructor({ store, runner, reviewer, testRunner, schedulerOptions = {}, onStatusChange, workspaceManager } = {}) {
+  constructor({ store, runner, reviewer, testRunner, schedulerOptions = {}, onStatusChange, workspaceManager, planner = planTask } = {}) {
     this.store = store || new JsonJobStore(process.env.JOB_STORAGE_DIR || join(process.cwd(), ".orchestration-jobs"));
     const configuredRunner = runner || createConfiguredAgentRunner();
     this.runner = typeof configuredRunner === "function"
@@ -40,6 +40,7 @@ export class OrchestrationService {
     this.jobControllers = new Map();
     this.cancelled = new Set();
     this.onStatusChange = typeof onStatusChange === "function" ? onStatusChange : () => {};
+    this.planner = typeof planner === "function" ? planner : planTask;
   }
 
   async createJob(task) {
@@ -55,7 +56,7 @@ export class OrchestrationService {
     const jobSignal = this.jobControllers.get(jobId)?.signal;
     try {
       await this.setStatus(jobId, "planning");
-      const planned = planTask((await this.store.get(jobId)).task);
+      const planned = this.planner((await this.store.get(jobId)).task);
       if (this.cancelled.has(jobId)) return;
       if (planned.subtasks.length > this.limits.maxSubtasks) {
         await this.store.update(jobId, job => {

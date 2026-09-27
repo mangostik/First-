@@ -9,7 +9,7 @@ import { JsonJobStore } from "../src/orchestration/job-store.js";
 import { DependencyScheduler } from "../src/orchestration/scheduler.js";
 import { OrchestrationService } from "../src/orchestration/service.js";
 import { WorkspaceManager } from "../src/orchestration/workspace.js";
-import { createMockAgentRunner, createRealAgentAdapter } from "../src/orchestration/agent-runner.js";
+import { createMockAgentRunner } from "../src/orchestration/agent-runner.js";
 import { createRealJobReviewer } from "../src/orchestration/reviewer.js";
 import { requestWithTimeout } from "../src/providers/http.js";
 import { runProviderReviewLoop } from "../src/review-loop.js";
@@ -28,18 +28,6 @@ async function oneTask(store, label) {
   await store.create(job);
   return job;
 }
-
-test("real adapter never treats needs_changes or incomplete coverage as completed", async () => {
-  for (const reviewResult of [
-    { final_status: "FINAL_DECISION", coverage_complete: true, decision: { status: "needs_changes", ready_to_merge: false } },
-    { final_status: "BLOCKED", coverage_complete: false, decision: { status: "agree", ready_to_merge: true } }
-  ]) {
-    const adapter = createRealAgentAdapter({ review: async () => reviewResult });
-    const result = await adapter.run({ subtask: { role: "backend", instructions: "review" } });
-    assert.equal(result.status, "failed");
-    assert.match(result.error, /not approved/);
-  }
-});
 
 test("job-level real reviewer cannot approve failed work despite provider approval", async () => {
   const reviewer = createRealJobReviewer({ review: async () => ({

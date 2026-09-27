@@ -110,6 +110,7 @@ export function validateSubtask(value) {
     role: asString(value.role, "subtask.role"),
     title: asString(value.title, "subtask.title"),
     instructions: asString(value.instructions, "subtask.instructions"),
+    allowed_files: asStringArray(value.allowed_files || [], "subtask.allowed_files"),
     dependencies: (value.dependencies || []).map(validateDependency),
     status,
     attempts: Number.isInteger(value.attempts) && value.attempts >= 0 ? value.attempts : 0,

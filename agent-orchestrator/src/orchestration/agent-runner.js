@@ -1,5 +1,5 @@
 import { getAgentDefinition } from "./agent-registry.js";
-import { runAgentReview } from "../mcp-runner.js";
+import { createConfiguredCodingAgent } from "./coding-agent-executor.js";
 
 export const AGENT_RUNNER_MODES = Object.freeze(["mock", "real"]);
 
@@ -34,47 +34,8 @@ export function createMockAgentAdapter(options = {}) {
   return { mode: "mock", run: createMockAgentRunner(options) };
 }
 
-export function createRealAgentAdapter({ review = runAgentReview } = {}) {
-  return {
-    mode: "real",
-    async run({ subtask, signal, workspace }) {
-      if (signal?.aborted) throw new Error("cancelled");
-      const assignedWorkspace = workspace || subtask.workspace || null;
-      const workspacePath = assignedWorkspace?.workspace_path || "";
-      const workspaceContext = workspacePath
-        ? `\nWork only inside this assigned workspace: ${workspacePath}\nBranch: ${assignedWorkspace.branch_name}\nBase ref: ${assignedWorkspace.base_ref}`
-        : "";
-      const result = await review(
-        { task: `${subtask.instructions}${workspaceContext}` },
-        {
-          signal,
-          env: {
-            ...process.env,
-            ...(workspacePath ? {
-              ORCHESTRATION_WORKSPACE_PATH: workspacePath,
-              ORCHESTRATION_BRANCH_NAME: assignedWorkspace.branch_name,
-              ORCHESTRATION_BASE_REF: assignedWorkspace.base_ref
-            } : {})
-          }
-        }
-      );
-      const approved = ["FINAL_DECISION", "CONSENSUS"].includes(result.final_status) &&
-        result.coverage_complete !== false && result.decision?.ready_to_merge === true &&
-        ["agree", "approved"].includes(result.decision?.status) &&
-        !(result.decision?.critical_issues || []).length;
-      return {
-        status: approved ? "completed" : "failed",
-        summary: result.decision?.status || result.final_status || "real review completed",
-        changed_files: [],
-        tests: [`${subtask.role} real runner review loop completed`],
-        warnings: [
-          ...(result.decision?.critical_issues || []),
-          ...(result.decision?.recommended_changes || [])
-        ].map(String),
-        error: approved ? null : `real review not approved: ${result.final_status || "unknown"}`
-      };
-    }
-  };
+export function createRealAgentAdapter(options = {}) {
+  return createConfiguredCodingAgent(options);
 }
 
 export function getAgentRunnerMode(env = process.env) {
@@ -87,6 +48,6 @@ export function getAgentRunnerMode(env = process.env) {
 
 export function createConfiguredAgentRunner({ env = process.env, mockOptions = {}, realOptions = {} } = {}) {
   return getAgentRunnerMode(env) === "real"
-    ? createRealAgentAdapter(realOptions)
+    ? createRealAgentAdapter({ env, ...realOptions })
     : createMockAgentAdapter(mockOptions);
 }

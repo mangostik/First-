@@ -9,7 +9,6 @@ import { JsonJobStore } from "../src/orchestration/job-store.js";
 import { planTask } from "../src/orchestration/planner.js";
 import {
   createMockAgentRunner,
-  createRealAgentAdapter,
   createConfiguredAgentRunner,
   getAgentRunnerMode
 } from "../src/orchestration/agent-runner.js";
@@ -198,30 +197,21 @@ test("real job reviewer is a separate adapter over the legacy review loop", asyn
   assert.equal(result.final_decision, "approved");
 });
 
-test("runner adapters support mock and injected real implementations", async () => {
+test("runner adapters support mock and configured coding implementations", async () => {
   assert.equal(getAgentRunnerMode({}), "mock");
   assert.equal(getAgentRunnerMode({ ORCHESTRATION_AGENT_MODE: "REAL" }), "real");
   assert.equal(createConfiguredAgentRunner({ env: {} }).mode, "mock");
   assert.throws(() => getAgentRunnerMode({ ORCHESTRATION_AGENT_MODE: "other" }), /Invalid/);
-
-  let receivedTask = "";
-  let receivedOptions;
-  const real = createRealAgentAdapter({
-    review: async (input, options) => {
-      receivedTask = input.task;
-      receivedOptions = options;
-      return { final_status: "CONSENSUS", decision: { status: "agree", ready_to_merge: true, critical_issues: [], recommended_changes: [] } };
-    }
-  });
-  const result = await real.run({
-    subtask: { role: "backend", instructions: "review this API" },
-    workspace: { workspace_path: "C:\\assigned\\backend", branch_name: "orchestrator/job/backend", base_ref: "stage4-mcp" }
-  });
+  const root = await mkdtemp(join(tmpdir(), "fishcrm-real-runner-config-"));
+  const real = createConfiguredAgentRunner({ env: {
+    ORCHESTRATION_AGENT_MODE: "real",
+    ORCHESTRATION_REPO_ROOT: root,
+    ORCHESTRATION_WORKSPACE_ROOT: join(root, "workspaces")
+  } });
   assert.equal(real.mode, "real");
-  assert.match(receivedTask, /review this API/);
-  assert.match(receivedTask, /C:\\assigned\\backend/);
-  assert.equal(receivedOptions.env.ORCHESTRATION_WORKSPACE_PATH, "C:\\assigned\\backend");
-  assert.equal(result.status, "completed");
+  assert.equal(real.runtime, "codex");
+  assert.equal(real.limits.max_processes_per_attempt, 1);
+  await rm(root, { recursive: true, force: true });
 });
 
 test("scheduler starts independent work in parallel and respects dependencies", async () => {
@@ -365,23 +355,20 @@ test("service completes the non-blocking MVP job with a final result", async () 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("service runs backend and QA through the real adapter in parallel and preserves workspaces", async () => {
+test("service runs backend and QA through an injected runner in parallel and preserves workspaces", async () => {
   const { root, store, workspaceManager } = await fixture();
   try {
     const activeWorkspaces = new Set();
     let maxActive = 0;
     let active = 0;
-    const runner = createRealAgentAdapter({
-      review: async input => {
-        const match = input.task.match(/assigned workspace: ([^\n]+)/);
+    const runner = async ({ workspace }) => {
         active += 1;
         maxActive = Math.max(maxActive, active);
-        if (match) activeWorkspaces.add(match[1]);
+        activeWorkspaces.add(workspace.workspace_path);
         await new Promise(resolve => setTimeout(resolve, 20));
         active -= 1;
-        return { final_status: "CONSENSUS", decision: { status: "agree", ready_to_merge: true, critical_issues: [], recommended_changes: [] } };
-      }
-    });
+        return { status: "completed", summary: "injected runner", changed_files: [], tests: ["injected runner check"], warnings: [], error: null };
+      };
     const service = new OrchestrationService({
       store,
       workspaceManager,
@@ -396,7 +383,7 @@ test("service runs backend and QA through the real adapter in parallel and prese
     let job;
     for (let i = 0; i < 600; i += 1) {
       job = await service.getStatus(created.job_id);
-      if (job.status === "completed") break;
+      if (["completed", "failed", "cancelled"].includes(job.status)) break;
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     assert.equal(job.status, "completed");

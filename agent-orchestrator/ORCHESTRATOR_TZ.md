@@ -37,7 +37,10 @@
 
 - [x] Adapter-интерфейс agent runner.
 - [x] Конфигурация mock/real runner.
-- [x] Подключение существующего Claude/OpenAI review loop как real runner.
+- [x] Существующий Claude/OpenAI review loop сохранён как reviewer; он больше не выдаётся за coding-agent executor.
+- [x] Минимальный настоящий coding-agent executor запускает локальный Codex CLI в cwd отдельного worktree, передаёт точный список разрешённых файлов и проверяет фактический Git diff.
+- [x] Пустой diff, изменение вне file boundary, попытка работы с `main`, ненулевой exit code, timeout и cancel не считаются успешным выполнением.
+- [x] Timeout/cancel coding-процесса удерживает scheduler slot до закрытия дочернего процесса; перекрывающий retry не начинается.
 - [x] Per-request timeout для Claude/OpenAI: по `120000` мс по умолчанию; общий GitHub timeout не увеличивается.
 - [x] Ограниченные provider retries для 429/5xx и structured-output retries с явной причиной остановки.
 - [x] AbortSignal/cancellation для provider requests и гарантированный structured failure JSON при timeout/error.
@@ -46,7 +49,7 @@
 - [x] Оптимизирован review loop: один обязательный раунд по всем chunks, follow-up только для проблемных chunks, guard перед новым provider call и partial result при неполном покрытии; `ready_to_merge=false` до полного покрытия.
 - [x] Deterministic mock runner для тестов.
 - [x] Cost-aware review modes: `cheap` по умолчанию, `standard` для рискованных chunks и ручной `deep`; лимиты chunks/provider calls/output tokens/time/estimated cost, redacted usage metrics и structured `COST_LIMIT` partial result.
-- [x] Реальный параллельный запуск двух независимых agent tasks через текущий scheduler с default `concurrency=2`.
+- [partial] Реальный параллельный запуск двух независимых coding-agent tasks: executor и управляемые subprocess/worktree tests готовы; один живой Codex CLI pilot ожидает отдельного подтверждения расхода account quota.
 - [x] Real runner получает отдельный workspace descriptor каждой подзадачи; автоматический merge отсутствует.
 - [x] Opt-in real-runner smoke test добавлен и отключён по умолчанию.
 - [x] Integration lifecycle tests: `create → planning → running → completed/failed`.
