@@ -96,8 +96,12 @@ export class JsonJobStore {
     return this.enqueue(async () => {
       const current = await this.get(jobId);
       const next = await updater(structuredClone(current));
-      next.updated_at = new Date().toISOString();
-      return this._write(next);
+      if (!next || next.job_id !== current.job_id || next.job_id !== String(jobId)) {
+        throw new Error("job updater cannot change job_id");
+      }
+      const valid = validateJob(next);
+      valid.updated_at = new Date().toISOString();
+      return this._write(valid);
     });
   }
 

@@ -71,6 +71,7 @@ test("workspace manager handles Git errors and explicit idempotent cleanup", asy
     assert.equal(released.state, "released");
     assert.equal((await manager.cleanup(released)).state, "released");
     await assert.rejects(() => manager.cleanup({ ...workspace, workspace_path: root }), /outside the allowed root/);
+    await assert.rejects(() => manager.cleanup({ ...workspace, branch_name: "refs/heads/main" }), /base_ref main is forbidden|main branch is forbidden/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

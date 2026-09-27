@@ -96,7 +96,7 @@ export class WorkspaceManager {
     rejectMainRef(workspace.base_ref);
     const workspacePath = resolve(String(workspace.workspace_path || ""));
     if (!isWithin(this.rootDir, workspacePath) || workspacePath === this.rootDir) throw new Error("workspace cleanup path is outside the allowed root");
-    if (String(workspace.branch_name || "").toLowerCase() === "main") throw new Error("cleanup of main branch is forbidden");
+    rejectMainRef(workspace.branch_name);
     try {
       await access(workspacePath);
     } catch (error) {

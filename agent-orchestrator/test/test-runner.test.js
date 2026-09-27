@@ -41,6 +41,20 @@ test("real test runner maps process errors to error and timeout evidence", async
   assert.match(timeout.error, /5ms/);
 });
 
+test("test runner propagates an already-aborted parent signal", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let called = false;
+  const runner = withTestTimeout({ mode: "mock", run: async ({ signal }) => {
+    called = true;
+    assert.equal(signal.aborted, true);
+    return { status: "passed", command: "mock", exit_code: 0, stdout: "", stderr: "", duration_ms: 0, error: null };
+  } }, 100);
+  const result = await runner.run({ signal: controller.signal });
+  assert.equal(called, true);
+  assert.equal(result.status, "passed");
+});
+
 test("job reviewer rejects missing or unsuccessful project test evidence", async () => {
   const reviewer = createMockJobReviewer();
   const aggregate = { summary: "1/1", changed_files: [], tests: ["agent test passed"], warnings: [], conflicts: [], remaining_work: [], workspaces: [] };

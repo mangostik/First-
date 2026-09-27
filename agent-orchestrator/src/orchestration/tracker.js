@@ -2,11 +2,18 @@ import { redactSecrets } from "./observability.js";
 
 const SAFE_JOB_ID = /^[A-Za-z0-9_-]{1,100}$/;
 
-function json(res, status, value, setCookie = false, token = "") {
+function trackerCookie(token, req) {
+  const forwardedProto = String(req?.headers?.["x-forwarded-proto"] || "").toLowerCase();
+  const secure = String(process.env.ORCHESTRATION_TRACKER_SECURE_COOKIES || "1") !== "0" &&
+    (forwardedProto === "https" || forwardedProto === "" || process.env.NODE_ENV === "production" || process.env.NODE_ENV === "staging");
+  return `tracker_access=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/${secure ? "; Secure" : ""}`;
+}
+
+function json(res, status, value, setCookie = false, token = "", req = null) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
-  if (setCookie && token) res.setHeader("Set-Cookie", `tracker_access=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/`);
+  if (setCookie && token) res.setHeader("Set-Cookie", trackerCookie(token, req));
   res.end(JSON.stringify(redactSecrets(value)));
 }
 
@@ -52,7 +59,7 @@ export class ReadOnlyTracker {
       return true;
     }
     if (rawPath.startsWith("/api/jobs") && rawPath.includes("..")) {
-      json(res, 400, { error: "invalid job_id" });
+      json(res, 400, { error: "invalid job_id" }, false, "", req);
       return true;
     }
     const url = new URL(req.url || "/", `http://${req.headers?.host || "localhost"}`);
@@ -62,30 +69,30 @@ export class ReadOnlyTracker {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'");
       res.setHeader("Cache-Control", "no-store");
-      if (cookie) res.setHeader("Set-Cookie", `tracker_access=${encodeURIComponent(this.token)}; HttpOnly; SameSite=Strict; Path=/`);
+      if (cookie) res.setHeader("Set-Cookie", trackerCookie(this.token, req));
       res.end(html());
       return true;
     }
     const jobId = idFrom(url.pathname);
     try {
       if (url.pathname === "/api/jobs" && req.method === "GET") {
-        json(res, 200, { jobs: await this.store.list() }, cookie, this.token);
+        json(res, 200, { jobs: await this.store.list() }, cookie, this.token, req);
         return true;
       }
       if (!jobId || !SAFE_JOB_ID.test(jobId)) {
-        json(res, 400, { error: "invalid job_id" });
+        json(res, 400, { error: "invalid job_id" }, false, "", req);
         return true;
       }
       const job = await this.store.get(jobId);
       if (url.pathname.endsWith("/events")) {
         if (req.headers?.accept?.includes("text/event-stream")) return this.stream(req, res, jobId);
-        json(res, 200, { events: job.events || [] }, cookie, this.token);
-      } else json(res, 200, { job }, cookie, this.token);
+        json(res, 200, { events: job.events || [] }, cookie, this.token, req);
+      } else json(res, 200, { job }, cookie, this.token, req);
       return true;
     } catch (error) {
-      if (error?.code === "ENOENT") json(res, 404, { error: "job not found" });
-      else if (/Invalid job_id/.test(error?.message || "")) json(res, 400, { error: "invalid job_id" });
-      else json(res, 500, { error: "tracker storage error" });
+      if (error?.code === "ENOENT") json(res, 404, { error: "job not found" }, false, "", req);
+      else if (/Invalid job_id/.test(error?.message || "")) json(res, 400, { error: "invalid job_id" }, false, "", req);
+      else json(res, 500, { error: "tracker storage error" }, false, "", req);
       return true;
     }
   }
