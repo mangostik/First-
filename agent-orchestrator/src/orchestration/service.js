@@ -22,16 +22,29 @@ export class OrchestrationService {
     this.testRunner = testRunner || createConfiguredTestRunner();
     this.workspaceManager = workspaceManager || createConfiguredWorkspaceManager();
     this.baseRef = process.env.ORCHESTRATION_BASE_REF || "stage4-mcp";
-    this.limits = { ...readOrchestrationLimits(), ...schedulerOptions };
-    this.schedulerOptions = schedulerOptions;
+    const limits = readOrchestrationLimits();
+    const nonNegative = (name, value) => {
+      if (!Number.isFinite(value) || value < 0) throw new Error(`Invalid scheduler option: ${name}`);
+      return value;
+    };
+    this.limits = {
+      ...limits,
+      maxSubtasks: Math.min(limits.maxSubtasks, schedulerOptions.maxSubtasks == null ? limits.maxSubtasks : nonNegative("maxSubtasks", Number(schedulerOptions.maxSubtasks))),
+      maxParallel: Math.min(limits.maxParallel, schedulerOptions.maxParallel == null ? limits.maxParallel : nonNegative("maxParallel", Number(schedulerOptions.maxParallel))),
+      maxRetries: Math.min(limits.maxRetries, schedulerOptions.maxRetries == null ? limits.maxRetries : nonNegative("maxRetries", Number(schedulerOptions.maxRetries))),
+      subtaskTimeoutMs: Math.min(limits.subtaskTimeoutMs, schedulerOptions.timeoutMs == null ? limits.subtaskTimeoutMs : nonNegative("timeoutMs", Number(schedulerOptions.timeoutMs))),
+      jobTimeoutMs: Math.min(limits.jobTimeoutMs, schedulerOptions.jobTimeoutMs == null ? limits.jobTimeoutMs : nonNegative("jobTimeoutMs", Number(schedulerOptions.jobTimeoutMs)))
+    };
     this.schedulers = new Map();
     this.processes = new Map();
+    this.jobControllers = new Map();
     this.cancelled = new Set();
     this.onStatusChange = typeof onStatusChange === "function" ? onStatusChange : () => {};
   }
 
   async createJob(task) {
     const job = await this.store.create(createJob(task));
+    this.jobControllers.set(job.job_id, new AbortController());
     const processing = this.process(job.job_id);
     this.processes.set(job.job_id, processing);
     processing.finally(() => this.processes.delete(job.job_id)).catch(() => {});
@@ -39,6 +52,7 @@ export class OrchestrationService {
   }
 
   async process(jobId) {
+    const jobSignal = this.jobControllers.get(jobId)?.signal;
     try {
       await this.setStatus(jobId, "planning");
       const planned = planTask((await this.store.get(jobId)).task);
@@ -73,8 +87,7 @@ export class OrchestrationService {
         timeoutMs: this.limits.subtaskTimeoutMs,
         maxRetries: this.limits.maxRetries,
         jobTimeoutMs: this.limits.jobTimeoutMs,
-        logEvents: this.limits.logEvents,
-        ...this.schedulerOptions
+        logEvents: this.limits.logEvents
       });
       this.schedulers.set(jobId, scheduler);
       let job = await scheduler.run(jobId);
@@ -85,17 +98,21 @@ export class OrchestrationService {
         return;
       }
       await this.setStatus(jobId, "integrating");
+      if (this.cancelled.has(jobId)) return;
       job = await this.store.get(jobId);
       const aggregate = integrateSubtasks(job);
-      await this.store.update(jobId, current => { current.aggregate = aggregate; return current; });
+      await this.store.update(jobId, current => { if (current.status !== "cancelled") current.aggregate = aggregate; return current; });
+      if (this.cancelled.has(jobId)) return;
       let testEvidence;
       try {
         testEvidence = await this.testRunner.run({
           job,
           aggregate,
-          workspace: aggregate.workspaces[0] || null
+          workspace: aggregate.workspaces[0] || null,
+          signal: jobSignal
         });
       } catch (error) {
+        if (this.cancelled.has(jobId)) return;
         testEvidence = validateTestEvidence({
           status: "error",
           command: this.testRunner.mode || "project-tests",
@@ -105,9 +122,12 @@ export class OrchestrationService {
           error: error?.message || String(error)
         });
       }
-      await this.store.update(jobId, current => { current.test_evidence = testEvidence; return current; });
+      if (this.cancelled.has(jobId)) return;
+      await this.store.update(jobId, current => { if (current.status !== "cancelled") current.test_evidence = testEvidence; return current; });
       await this.setStatus(jobId, "reviewing");
-      const review = await this.reviewer.review({ task: job.task, aggregate, testEvidence });
+      if (this.cancelled.has(jobId)) return;
+      const review = await this.reviewer.review({ task: job.task, aggregate, testEvidence, signal: jobSignal });
+      if (this.cancelled.has(jobId)) return;
       const latest = await this.store.get(jobId);
       const result = validateFinalJobResult({
         ...aggregate,
@@ -121,13 +141,16 @@ export class OrchestrationService {
         limit_violations: latest.limit_violations,
         duration_ms: durationMs(latest)
       });
-      await this.store.update(jobId, current => { current.result = result; return current; });
+      await this.store.update(jobId, current => { if (current.status !== "cancelled") current.result = result; return current; });
+      if (this.cancelled.has(jobId)) return;
       await this.setStatus(jobId, review.approved ? "completed" : "failed");
     } catch (error) {
+      if (this.cancelled.has(jobId)) return;
       await this.store.update(jobId, job => { job.error = error.message; addEvent(job, "job_failed", { reason: error.message }); return job; }).catch(() => {});
       await this.setStatus(jobId, "failed").catch(() => {});
     } finally {
       this.schedulers.delete(jobId);
+      this.jobControllers.delete(jobId);
     }
   }
 
@@ -135,6 +158,7 @@ export class OrchestrationService {
   getResult(jobId) { return this.store.get(jobId).then(job => job.result); }
 
   async runWithWorkspace({ job, subtask, attempt, signal }) {
+    if (signal?.aborted) throw new Error("cancelled");
     let workspace = subtask.workspace;
     if (!workspace) {
       workspace = await this.workspaceManager.create({
@@ -144,22 +168,23 @@ export class OrchestrationService {
       });
       await this.store.update(job.job_id, current => {
         const item = current.subtasks.find(value => value.id === subtask.id);
-        if (item) item.workspace = workspace;
+        if (item) item.workspace = current.status === "cancelled" ? { ...workspace, state: "cancelled" } : workspace;
         return current;
       });
     }
     workspace = await this.workspaceManager.markState(workspace, signal?.aborted ? "cancelled" : "running");
     await this.store.update(job.job_id, current => {
       const item = current.subtasks.find(value => value.id === subtask.id);
-      if (item) item.workspace = workspace;
+      if (item) item.workspace = current.status === "cancelled" ? { ...workspace, state: "cancelled" } : workspace;
       return current;
     });
     try {
       const result = await this.runner({ job, subtask: { ...subtask, workspace }, attempt, signal, workspace });
+      if (signal?.aborted) throw new Error("cancelled");
       workspace = await this.workspaceManager.markState(workspace, "completed");
       await this.store.update(job.job_id, current => {
         const item = current.subtasks.find(value => value.id === subtask.id);
-        if (item) item.workspace = workspace;
+        if (item) item.workspace = current.status === "cancelled" ? { ...workspace, state: "cancelled" } : workspace;
         return current;
       });
       return result;
@@ -167,7 +192,7 @@ export class OrchestrationService {
       workspace = await this.workspaceManager.markState(workspace, signal?.aborted ? "cancelled" : "failed");
       await this.store.update(job.job_id, current => {
         const item = current.subtasks.find(value => value.id === subtask.id);
-        if (item) item.workspace = workspace;
+        if (item) item.workspace = current.status === "cancelled" ? { ...workspace, state: "cancelled" } : workspace;
         return current;
       }).catch(() => {});
       throw error;
@@ -193,10 +218,17 @@ export class OrchestrationService {
     const current = await this.store.get(jobId);
     if (current.status === "completed" || current.status === "failed" || current.status === "cancelled") return current;
     this.cancelled.add(jobId);
+    this.jobControllers.get(jobId)?.abort(new Error("job_cancelled"));
     const scheduler = this.schedulers.get(jobId);
     if (scheduler) await scheduler.cancel(jobId);
     else await this.store.update(jobId, job => { job.status = "cancelled"; job.cancelled_at = new Date().toISOString(); return job; });
     await this.processes.get(jobId);
+    await this.store.update(jobId, job => {
+      for (const subtask of job.subtasks) {
+        if (subtask.status === "cancelled" && subtask.workspace) subtask.workspace.state = "cancelled";
+      }
+      return job;
+    });
     try { await this.onStatusChange(await this.store.get(jobId)); } catch {}
     if (!(await this.store.get(jobId)).result) await this.saveFailureResult(jobId, "cancelled");
     return this.store.get(jobId);

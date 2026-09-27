@@ -58,9 +58,12 @@ export function createRealAgentAdapter({ review = runAgentReview } = {}) {
           }
         }
       );
-      const blocked = result.final_status === "BLOCKED" || result.decision?.status === "blocked";
+      const approved = ["FINAL_DECISION", "CONSENSUS"].includes(result.final_status) &&
+        result.coverage_complete !== false && result.decision?.ready_to_merge === true &&
+        ["agree", "approved"].includes(result.decision?.status) &&
+        !(result.decision?.critical_issues || []).length;
       return {
-        status: blocked ? "failed" : "completed",
+        status: approved ? "completed" : "failed",
         summary: result.decision?.status || result.final_status || "real review completed",
         changed_files: [],
         tests: [`${subtask.role} real runner review loop completed`],
@@ -68,7 +71,7 @@ export function createRealAgentAdapter({ review = runAgentReview } = {}) {
           ...(result.decision?.critical_issues || []),
           ...(result.decision?.recommended_changes || [])
         ].map(String),
-        error: blocked ? "real review blocked" : null
+        error: approved ? null : `real review not approved: ${result.final_status || "unknown"}`
       };
     }
   };

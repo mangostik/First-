@@ -1,3 +1,5 @@
+import { aggregateChunkResults } from "./aggregation.js";
+
 export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0, events = error?.reviewEvents || [], partial = error?.partialResult || null } = {}) {
   const provider = error?.provider || (error?.message || "").match(/^(Claude|OpenAI)/)?.[1] || null;
   const code = error?.code || "REVIEW_ERROR";
@@ -8,15 +10,16 @@ export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0, even
   const reason = String(error?.message || error || "Unknown review failure");
   const lastProviderEvent = [...events].reverse().find(event => event?.provider);
   const completedChunks = Array.isArray(partial?.chunkResults) ? partial.chunkResults.map(item => item.chunk) : [];
+  const partialAggregate = completedChunks.length ? aggregateChunkResults(partial.chunkResults, null, false) : null;
   return {
     final_status: status,
     ready_to_merge: false,
     reason,
     error: { code, provider, message: reason },
     rounds: 0,
-    chunks_reviewed: partial?.mandatory_completed ?? chunksReviewed,
+    chunks_reviewed: partial ? completedChunks.length : chunksReviewed,
     chunks_total: partial?.chunks_total ?? chunksTotal,
-    coverage_complete: partial?.coverage_complete === true,
+    coverage_complete: false,
     executed_chunks: completedChunks,
     last_provider: partial?.last_provider || lastProviderEvent?.provider || null,
     last_chunk: partial?.last_chunk || lastProviderEvent?.chunk || null,
@@ -24,6 +27,7 @@ export function failureResult(error, { chunksReviewed = 0, chunksTotal = 0, even
     elapsed_ms: partial?.elapsed_ms ?? null,
     usage: partial?.usage || null,
     partial_result: partial,
+    partial_aggregate: partialAggregate,
     decision: {
       status: "blocked",
       critical_issues: [`Review did not complete: ${reason}`],

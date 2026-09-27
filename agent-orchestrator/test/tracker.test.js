@@ -50,11 +50,14 @@ test("tracker serves SSE snapshots when the existing job event model changes", a
     const req = request(`/api/jobs/${job.job_id}/events`, { accept: "text/event-stream" });
     const res = response();
     await tracker.handle(req, res);
-    assert.match(res.headers["Content-Type"], /text\/event-stream/);
-    await store.update(job.job_id, current => { current.status = "running"; current.events.push({ type: "job_state", status: "running", timestamp: new Date().toISOString() }); return current; });
-    await new Promise(resolve => setTimeout(resolve, 60));
-    assert.ok(res.chunks.some(chunk => chunk.includes("job_state") && chunk.includes("running")));
-    req.emit("close");
+    try {
+      assert.match(res.headers["Content-Type"], /text\/event-stream/);
+      await store.update(job.job_id, current => { current.status = "running"; current.events.push({ type: "job_state", status: "running", timestamp: new Date().toISOString() }); return current; });
+      const observed = () => res.chunks.some(chunk => chunk.includes("job_state") && chunk.includes("running"));
+      const deadline = Date.now() + 2000;
+      while (!observed() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+      assert.ok(observed(), "SSE should deliver the running job event before the deadline");
+    } finally { req.emit("close"); }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

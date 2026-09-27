@@ -24,12 +24,9 @@ export async function requestWithTimeout({ provider, timeoutMs, signal, request 
 
   const abortPromise = new Promise((_, reject) => {
     rejectAbort = () => reject(new ProviderRequestError(`${provider} request was cancelled`, {
-      code: "PROVIDER_ABORTED",
-      provider,
-      timeoutMs: limit
+      code: "PROVIDER_ABORTED", provider, timeoutMs: limit
     }));
   });
-
   const abortFromCaller = () => {
     externallyAborted = true;
     controller.abort(signal.reason);
@@ -44,30 +41,24 @@ export async function requestWithTimeout({ provider, timeoutMs, signal, request 
       timedOut = true;
       controller.abort(new Error(`${provider} request timeout`));
       reject(new ProviderRequestError(`${provider} request timed out after ${limit}ms`, {
-        code: "PROVIDER_TIMEOUT",
-        provider,
-        timeoutMs: limit
+        code: "PROVIDER_TIMEOUT", provider, timeoutMs: limit
       }));
     }, limit);
   });
 
   try {
-    if (externallyAborted) {
-      throw new ProviderRequestError(`${provider} request was cancelled`, {
-        code: "PROVIDER_ABORTED",
-        provider,
-        timeoutMs: limit
-      });
-    }
+    if (externallyAborted) throw new ProviderRequestError(`${provider} request was cancelled`, {
+      code: "PROVIDER_ABORTED", provider, timeoutMs: limit
+    });
     return await Promise.race([Promise.resolve().then(() => request(controller.signal)), timeoutPromise, abortPromise]);
   } catch (error) {
-    if (timedOut || error?.code === "PROVIDER_TIMEOUT") throw error;
+    if (timedOut) throw new ProviderRequestError(`${provider} request timed out after ${limit}ms`, {
+      code: "PROVIDER_TIMEOUT", provider, timeoutMs: limit, cause: error
+    });
+    if (error?.code === "PROVIDER_TIMEOUT") throw error;
     if (externallyAborted || error?.name === "AbortError") {
       throw new ProviderRequestError(`${provider} request was cancelled`, {
-        code: "PROVIDER_ABORTED",
-        provider,
-        timeoutMs: limit,
-        cause: error
+        code: "PROVIDER_ABORTED", provider, timeoutMs: limit, cause: error
       });
     }
     throw error;
@@ -84,9 +75,11 @@ export function isRetryableProviderError(error) {
 export async function waitBeforeRetry({ attempt, retryAfterMs = 0, signal }) {
   const delayMs = Math.min(5000, Math.max(100, Number(retryAfterMs) || 250 * (2 ** (attempt - 1))));
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, delayMs);
+    if (signal?.aborted) return reject(new ProviderRequestError("Provider retry was cancelled", { code: "PROVIDER_ABORTED" }));
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", cancel); resolve(); }, delayMs);
     const cancel = () => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
       reject(new ProviderRequestError("Provider retry was cancelled", { code: "PROVIDER_ABORTED" }));
     };
     signal?.addEventListener("abort", cancel, { once: true });
