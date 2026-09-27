@@ -31,9 +31,11 @@ export function validateWorkspace(value) {
 
 export function validateDependency(value) {
   if (!value || typeof value !== "object") throw new Error("dependency must be an object");
+  const requiredStatus = asString(value.required_status || "completed", "dependency.required_status");
+  if (requiredStatus !== "completed") throw new Error(`Invalid dependency.required_status: ${requiredStatus}`);
   return {
     subtask_id: asString(value.subtask_id, "dependency.subtask_id"),
-    required_status: value.required_status || "completed"
+    required_status: requiredStatus
   };
 }
 
@@ -73,11 +75,14 @@ export function validateReviewResult(value) {
   if (!value || typeof value !== "object") throw new Error("review result must be an object");
   const finalDecision = asString(value.final_decision, "review.final_decision");
   if (!new Set(["approved", "rejected"]).has(finalDecision)) throw new Error(`Invalid review.final_decision: ${finalDecision}`);
+  if (typeof value.approved !== "boolean" || value.approved !== (finalDecision === "approved")) {
+    throw new Error("review.approved must match review.final_decision");
+  }
   return {
     final_decision: finalDecision,
     summary: asString(value.summary, "review.summary"),
     review_findings: asStringArray(value.review_findings || [], "review.review_findings"),
-    approved: Boolean(value.approved)
+    approved: value.approved
   };
 }
 
@@ -123,6 +128,7 @@ export function validateSubtask(value) {
 export function validateFinalJobResult(value) {
   if (!value || typeof value !== "object") throw new Error("final job result must be an object");
   const decision = asString(value.final_decision, "final job result.final_decision");
+  if (!new Set(["approved", "rejected"]).has(decision)) throw new Error(`Invalid final job result.final_decision: ${decision}`);
   return {
     summary: asString(value.summary, "final job result.summary"),
     changed_files: asStringArray(value.changed_files || [], "final job result.changed_files"),

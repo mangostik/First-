@@ -38,10 +38,16 @@ export function createRealJobReviewer({ review = runAgentReview } = {}) {
       const decision = result.decision || {};
       const findings = [
         ...(decision.critical_issues || []),
-        ...(decision.recommended_changes || [])
+        ...(decision.recommended_changes || []),
+        ...aggregate.conflicts,
+        ...aggregate.remaining_work
       ].map(String);
       if (!testEvidence || testEvidence.status !== "passed") findings.push("Project test gate did not pass");
-      const approved = decision.ready_to_merge === true && findings.length === 0 && result.final_status !== "BLOCKED";
+      const approved = ["FINAL_DECISION", "CONSENSUS"].includes(result.final_status) &&
+        result.coverage_complete !== false && decision.ready_to_merge === true &&
+        ["agree", "approved"].includes(decision.status) && findings.length === 0 &&
+        aggregate.conflicts.length === 0 && aggregate.remaining_work.length === 0 &&
+        testEvidence?.status === "passed";
       return validateReviewResult({
         final_decision: approved ? "approved" : "rejected",
         summary: decision.status || result.final_status || "Real review completed",

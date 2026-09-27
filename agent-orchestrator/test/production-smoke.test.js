@@ -39,6 +39,22 @@ async function mcpRequest(id, method, params = {}) {
   return response.json();
 }
 
+async function stopChild(child, exited, graceMs = 2000) {
+  if (child.exitCode === null && child.signalCode === null) child.kill();
+  const stopped = await Promise.race([exited.then(() => true), delay(graceMs).then(() => false)]);
+  if (!stopped) {
+    child.kill("SIGKILL");
+    await exited;
+  }
+}
+
+test("production smoke cleanup handles a child that exited before cleanup", async () => {
+  let killCalls = 0;
+  const child = { exitCode: 1, signalCode: null, kill: () => { killCalls += 1; } };
+  await stopChild(child, Promise.resolve(1), 5);
+  assert.equal(killCalls, 0);
+});
+
 test("production smoke: health, tracker and MCP tools are reachable without provider calls", async () => {
   const child = spawn(process.execPath, ["src/mcp-server.js"], {
     cwd: new URL("..", import.meta.url),
@@ -55,6 +71,7 @@ test("production smoke: health, tracker and MCP tools are reachable without prov
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
+  const exited = new Promise(resolve => child.once("exit", resolve));
 
   try {
     await waitForHealth(child);
@@ -92,7 +109,6 @@ test("production smoke: health, tracker and MCP tools are reachable without prov
     });
     assert.match(status.result.content[0].text, /"service":"fishcrm-agent-orchestrator"/);
   } finally {
-    child.kill();
-    await new Promise(resolve => child.once("exit", resolve));
+    await stopChild(child, exited);
   }
 });

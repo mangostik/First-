@@ -209,7 +209,7 @@ test("runner adapters support mock and injected real implementations", async () 
     review: async (input, options) => {
       receivedTask = input.task;
       receivedOptions = options;
-      return { final_status: "CONSENSUS", decision: { status: "agree", critical_issues: [], recommended_changes: [] } };
+      return { final_status: "CONSENSUS", decision: { status: "agree", ready_to_merge: true, critical_issues: [], recommended_changes: [] } };
     }
   });
   const result = await real.run({

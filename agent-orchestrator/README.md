@@ -86,8 +86,16 @@ npm run start:mcp
 does not open a port. The HTTP listener starts only through `npm run start:mcp`,
 which preserves `/health`, MCP initialization, and the registered tool set.
 
-The Claude/OpenAI review loop uses 120-second per-request timeouts plus a
-Review cost is controlled by `REVIEW_MODE`, `REVIEW_MAX_CHUNKS`, `REVIEW_MAX_ROUNDS`, `REVIEW_MAX_PROVIDER_CALLS`, `REVIEW_MAX_OUTPUT_TOKENS`, `REVIEW_TIME_BUDGET_MS` and `REVIEW_COST_BUDGET_USD`. `cheap` is the default: Claude reviews each selected chunk once, OpenAI checks only concrete findings and performs the final adjudication. `standard` keeps the same Claude pass but allows OpenAI checks on risky chunks. `deep` retains the full legacy Claude/OpenAI round structure and should be enabled manually. Every structured result includes redacted usage metrics; stopping on a provider-call, chunk, time, or estimated-cost limit returns `final_status=COST_LIMIT`, a partial result, and `ready_to_merge=false`.
+The Claude/OpenAI review loop uses 120-second per-request timeouts and an
+overall deadline. Review cost is controlled by `REVIEW_MODE`, `REVIEW_MAX_CHUNKS`,
+`REVIEW_MAX_ROUNDS`, `REVIEW_MAX_PROVIDER_CALLS`, `REVIEW_MAX_OUTPUT_TOKENS`,
+`REVIEW_TIME_BUDGET_MS`, and `REVIEW_COST_BUDGET_USD`. `REVIEW_MAX_EVENTS`
+bounds retained structured events (default `1000`). `cheap` reviews selected
+chunks once with Claude and asks OpenAI to confirm findings and adjudicate.
+`standard` covers all chunks with Claude before targeted OpenAI confirmations;
+`deep` retains the full manual review sequence. Every result includes redacted
+usage metrics. A provider-call, chunk, time, or estimated-cost limit returns
+a structured partial result with `ready_to_merge=false`.
 
 The provider loop also retains a `REVIEW_LOOP_TIMEOUT_MS` deadline for compatibility. `REVIEW_LOOP_GUARD_MS` reserves time before starting another provider request; if the remaining deadline is too short, the loop stops and preserves the partial structured result with `ready_to_merge=false`.
 Structured `provider_started`, `provider_completed`, `provider_timeout`,

@@ -99,4 +99,13 @@
 
 ## Текущий этап
 
+### PR #7: доказательный разбор Agent Review #91
+
+- [x] Конфликты с актуальным `stage4-mcp` сведены с сохранением ручного trusted reviewer и mock-only CI.
+- [x] Подтверждённые findings закрыты regression-тестами: non-approved real agent result, межjobная отмена scheduler, timeout без перекрывающего retry, обход лимитов через options, отмена после scheduling, противоречивые схемы, provider timeout race, невалидный review deadline и smoke cleanup.
+- [x] Псевдодефекты не исправлялись: tracker авторизует запросы в `ReadOnlyTracker.handle`; неполное cheap coverage уже блокируется в aggregate.
+- [x] В полном локальном test suite обнаружена и исправлена нестабильность SSE-теста: ожидание события теперь ограничено дедлайном, а stream закрывается в `finally`.
+- [ ] Merge PR #7, production deployment и реальные provider calls остаются отдельными решениями; test gate и CI обязательны перед обсуждением merge.
+
+
 Этап observability/limits и read-only web tracker реализованы и подтверждены зелёными CI runs #12/#13. Этап расширения role registry и Planner routing завершён и подтверждён зелёными CI runs #14 (push) и #15 (pull request). Production hardening подготовлен; merge/deployment не выполнялись. Provider review теперь поддерживает cost-aware режимы `cheap`/`standard`/`deep`: по умолчанию Claude делает один проход, OpenAI подключается только к findings и финальному adjudication, а provider calls, chunks, output tokens, time и estimated cost ограничены конфигурацией. Лимиты возвращают structured `COST_LIMIT` с usage metrics, partial result и `ready_to_merge=false`; mock CI не выполняет реальные provider calls. Автоматический review убран с `pull_request.synchronize`, поэтому review не повторяется на каждый push; `deep` доступен только через ручной `workflow_dispatch`. Существующий deadline/AbortSignal/retry/structured recovery path сохранён. MCP-level deadline `MCP_REVIEW_DEADLINE_MS=240000`, checkpoint прогресса и asynchronous orchestration tools остаются без изменений. Production deployment остаётся отдельным этапом и требует явного подтверждения.
