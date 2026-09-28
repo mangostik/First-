@@ -52,6 +52,15 @@ export function validateAgentResult(value) {
     tests: asStringArray(value.tests || [], "agent result.tests"),
     warnings: asStringArray(value.warnings || [], "agent result.warnings"),
     error: value.error == null ? null : String(value.error)
+    ,diagnostics: value.diagnostics && typeof value.diagnostics === "object" ? {
+      exit_code: value.diagnostics.exit_code == null ? null : Number(value.diagnostics.exit_code),
+      signal: value.diagnostics.signal == null ? null : String(value.diagnostics.signal),
+      termination_reason: value.diagnostics.termination_reason == null ? null : String(value.diagnostics.termination_reason),
+      stdout_excerpt: String(value.diagnostics.stdout_excerpt || ""),
+      stderr_excerpt: String(value.diagnostics.stderr_excerpt || ""),
+      stdout_truncated: Boolean(value.diagnostics.stdout_truncated),
+      stderr_truncated: Boolean(value.diagnostics.stderr_truncated)
+    } : null
     ,timestamps: value.timestamps && typeof value.timestamps === "object" ? value.timestamps : {}
     ,duration_ms: Number(value.duration_ms || 0)
     ,retry_reasons: asStringArray(value.retry_reasons || [], "agent result.retry_reasons")

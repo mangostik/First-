@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCodingAgentAdapter } from "../src/orchestration/coding-agent-executor.js";
 import { JsonJobStore } from "../src/orchestration/job-store.js";
+import { validateAgentResult } from "../src/orchestration/schemas.js";
 import { OrchestrationService } from "../src/orchestration/service.js";
 import { WorkspaceManager } from "../src/orchestration/workspace.js";
 
@@ -53,7 +54,7 @@ function nodeArgs({ workspacePath }) {
   ];
 }
 
-function adapter(workspaceRoot, extraEnv = {}, timeoutMs = 2_000) {
+function adapter(workspaceRoot, extraEnv = {}, timeoutMs = 2_000, options = {}) {
   return createCodingAgentAdapter({
     command: process.execPath,
     argsBuilder: nodeArgs,
@@ -61,7 +62,8 @@ function adapter(workspaceRoot, extraEnv = {}, timeoutMs = 2_000) {
     timeoutMs,
     killGraceMs: 100,
     env: process.env,
-    extraEnv
+    extraEnv,
+    ...options
   });
 }
 
@@ -88,6 +90,58 @@ test("coding agent cannot report success with an empty Git diff", async () => {
     assert.equal(result.status, "failed");
     assert.equal(result.error, "coding_agent_empty_diff");
     assert.deepEqual(result.changed_files, []);
+    assert.equal(result.diagnostics.exit_code, 0);
+    assert.equal(result.diagnostics.termination_reason, null);
+  } finally { await ctx.cleanup(); }
+});
+
+test("coding agent records bounded diagnostics for a failed process", async () => {
+  const ctx = await fixture();
+  try {
+    const workspace = await ctx.createWorkspace("job-process-error", "agent-error");
+    const result = await adapter(ctx.workspaces, {
+      TEST_AGENT_MODE: "error",
+      TEST_AGENT_EXIT_CODE: "7",
+      TEST_AGENT_STDERR: "controlled process failure"
+    }).run({ subtask: subtask("agent-error", "error.txt"), workspace });
+    assert.equal(result.status, "failed");
+    assert.equal(result.error, "coding_agent_process_failed");
+    assert.equal(result.diagnostics.exit_code, 7);
+    assert.equal(result.diagnostics.termination_reason, null);
+    assert.match(result.diagnostics.stderr_excerpt, /controlled process failure/);
+  } finally { await ctx.cleanup(); }
+});
+
+test("coding agent truncates long diagnostic output", async () => {
+  const ctx = await fixture();
+  try {
+    const workspace = await ctx.createWorkspace("job-long-output", "agent-long");
+    const result = await adapter(ctx.workspaces, {
+      TEST_AGENT_MODE: "empty",
+      TEST_AGENT_STDOUT: "x".repeat(5_000)
+    }, 2_000, { maxOutputBytes: 256, diagnosticExcerptChars: 80 }).run({
+      subtask: subtask("agent-long", "long.txt"), workspace
+    });
+    assert.equal(result.error, "coding_agent_empty_diff");
+    assert.equal(result.diagnostics.stdout_excerpt.length, 80);
+    assert.equal(result.diagnostics.stdout_truncated, true);
+  } finally { await ctx.cleanup(); }
+});
+
+test("coding agent redacts secrets before diagnostics survive schema validation", async () => {
+  const ctx = await fixture();
+  try {
+    const workspace = await ctx.createWorkspace("job-secret-output", "agent-secret");
+    const secret = "sk-1234567890abcdef";
+    const result = await adapter(ctx.workspaces, {
+      TEST_AGENT_MODE: "empty",
+      TEST_AGENT_STDOUT: `token=plain-secret ${secret}`,
+      TEST_AGENT_STDERR: "Authorization: Bearer top-secret-value"
+    }).run({ subtask: subtask("agent-secret", "secret.txt"), workspace });
+    const persisted = validateAgentResult(result);
+    const serialized = JSON.stringify(persisted.diagnostics);
+    assert.doesNotMatch(serialized, /plain-secret|1234567890abcdef|top-secret-value/);
+    assert.match(serialized, /REDACTED/);
   } finally { await ctx.cleanup(); }
 });
 

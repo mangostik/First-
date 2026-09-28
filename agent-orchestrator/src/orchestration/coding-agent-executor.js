@@ -1,9 +1,11 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { redactSecrets } from "./observability.js";
 
 const execFileAsync = promisify(execFile);
 const SECRET_NAME = /(api[_-]?key|token|secret|password|credential)/i;
+const DIAGNOSTIC_SECRET_ASSIGNMENT = /((?:api[_-]?key|authorization|token|password|secret|credential)\s*[:=]\s*)[^\r\n]*/gi;
 
 function finitePositive(value, fallback, name) {
   const number = Number(value);
@@ -80,9 +82,31 @@ function codexArgs({ workspacePath, model }) {
   return args;
 }
 
-function collectOutput(stream, limit, onChunk) {
+function collectOutput(stream, onChunk) {
   if (!stream) return;
-  stream.on("data", chunk => onChunk(Buffer.from(chunk).subarray(0, Math.max(0, limit))));
+  stream.on("data", chunk => onChunk(Buffer.from(chunk)));
+}
+
+function diagnosticExcerpt(value, limit) {
+  const assignedRedacted = String(value || "").replace(DIAGNOSTIC_SECRET_ASSIGNMENT, "$1[REDACTED]");
+  const redacted = String(redactSecrets(assignedRedacted))
+    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+    .trim();
+  return { text: redacted.slice(0, limit), truncated: redacted.length > limit };
+}
+
+function processDiagnostics(processResult, excerptLimit) {
+  const stdout = diagnosticExcerpt(processResult.stdout, excerptLimit);
+  const stderr = diagnosticExcerpt(processResult.stderr, excerptLimit);
+  return {
+    exit_code: processResult.exitCode == null ? null : Number(processResult.exitCode),
+    signal: processResult.signal || null,
+    termination_reason: processResult.terminationReason || null,
+    stdout_excerpt: stdout.text,
+    stderr_excerpt: stderr.text,
+    stdout_truncated: Boolean(processResult.stdoutTruncated || stdout.truncated),
+    stderr_truncated: Boolean(processResult.stderrTruncated || stderr.truncated)
+  };
 }
 
 function runChild({ command, args, cwd, env, input, signal, timeoutMs, killGraceMs, maxOutputBytes, spawnProcess = spawn, killTree = null }) {
@@ -95,9 +119,11 @@ function runChild({ command, args, cwd, env, input, signal, timeoutMs, killGrace
     let closed = false;
     let timeout;
     let forceTimer;
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
     const append = (current, chunk) => Buffer.concat([current, chunk]).subarray(0, maxOutputBytes);
-    collectOutput(child.stdout, maxOutputBytes, chunk => { stdout = append(stdout, chunk); });
-    collectOutput(child.stderr, maxOutputBytes, chunk => { stderr = append(stderr, chunk); });
+    collectOutput(child.stdout, chunk => { stdoutBytes += chunk.length; stdout = append(stdout, chunk); });
+    collectOutput(child.stderr, chunk => { stderrBytes += chunk.length; stderr = append(stderr, chunk); });
 
     const forceKill = async () => {
       if (closed) return;
@@ -132,6 +158,8 @@ function runChild({ command, args, cwd, env, input, signal, timeoutMs, killGrace
         signal: closeSignal,
         stdout: stdout.toString("utf8"),
         stderr: stderr.toString("utf8"),
+        stdoutTruncated: stdoutBytes > stdout.length,
+        stderrTruncated: stderrBytes > stderr.length,
         terminationReason
       });
     });
@@ -146,6 +174,7 @@ export function createCodingAgentAdapter({
   timeoutMs = 120_000,
   killGraceMs = 5_000,
   maxOutputBytes = 64 * 1024,
+  diagnosticExcerptChars = 2_048,
   argsBuilder = codexArgs,
   spawnProcess = spawn,
   gitChangedFiles = defaultGitChangedFiles,
@@ -158,6 +187,7 @@ export function createCodingAgentAdapter({
   const boundedTimeoutMs = finitePositive(timeoutMs, 120_000, "coding agent timeoutMs");
   const boundedKillGraceMs = finitePositive(killGraceMs, 5_000, "coding agent killGraceMs");
   const boundedOutputBytes = finitePositive(maxOutputBytes, 64 * 1024, "coding agent maxOutputBytes");
+  const boundedDiagnosticChars = finitePositive(diagnosticExcerptChars, 2_048, "coding agent diagnosticExcerptChars");
   const executable = basename(String(command)).toLowerCase();
   if (!new Set(["codex", "codex.exe"]).has(executable) && argsBuilder === codexArgs) {
     throw new Error("unsupported coding agent runtime");
@@ -202,6 +232,7 @@ export function createCodingAgentAdapter({
         killTree
       });
       const completedAt = new Date().toISOString();
+      const diagnostics = processDiagnostics(processResult, boundedDiagnosticChars);
       if (processResult.terminationReason === "cancelled") throw new Error("coding_agent_cancelled");
       if (processResult.terminationReason === "timeout") throw new Error("coding_agent_timeout");
       const changedFiles = await gitChangedFiles(workspacePath);
@@ -217,12 +248,14 @@ export function createCodingAgentAdapter({
         return {
           status: "failed", summary: `Coding agent exited with code ${processResult.exitCode}`, changed_files: changedFiles,
           tests: [], warnings: [], error: "coding_agent_process_failed",
+          diagnostics,
           timestamps: { started: startedAt, completed: completedAt }, duration_ms: Date.parse(completedAt) - Date.parse(startedAt)
         };
       }
       if (!changedFiles.length) {
         return {
           status: "failed", summary: "Coding agent produced no Git diff", changed_files: [], tests: [], warnings: [], error: "coding_agent_empty_diff",
+          diagnostics,
           timestamps: { started: startedAt, completed: completedAt }, duration_ms: Date.parse(completedAt) - Date.parse(startedAt)
         };
       }

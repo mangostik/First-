@@ -124,6 +124,13 @@
 - [partial] Agent Orchestrator CI: pull-request run на актуальном checkpoint зелёный; один push-run упал на шаге orchestration tests без доступного подробного лога, поэтому причина не доказана. Staging deployment для актуального SHA запущен, финальный статус и smoke ещё не подтверждены.
 - [ ] Авторизованный staging MCP smoke остаётся незавершённым: режимы и токены не проверены, production deployment не разрешён.
 
+### Локальный coding-agent pilot
+
+- [x] Run2 подтвердил запуск двух Codex CLI процессов в разных Git worktree без retry; оба завершились штатно с exit code `0`, но не создали Git diff.
+- [x] Доказанный диагностический пробел закрыт: `coding_agent_empty_diff` и non-zero process result сохраняют bounded stdout/stderr excerpts, exit code, signal и termination reason.
+- [x] Диагностика редактирует secret assignments и известные token patterns до обрезки; long output и schema persistence покрыты бесплатными subprocess-тестами.
+- [ ] Причина поведения Codex внутри run2 не может быть восстановлена из старого запуска, потому что исходный executor отбросил output; один новый real pilot требует отдельного подтверждения квоты.
+
 Все изменения ограничены подтверждёнными сценариями; security-модель trusted reviewer, ручной workflow и legacy MCP-инструменты не менялись. Авторизованный staging MCP smoke остаётся незавершённым и блокирует production deployment.
 
 
