@@ -47,10 +47,32 @@ test("scheduler treats a failed agent result as failed work", async () => {
   const { root, store } = await fixture();
   try {
     const job = await oneTask(store, "failed result");
-    const scheduler = new DependencyScheduler({ store, runner: async () => ({ status: "failed", error: "needs_changes" }), maxRetries: 0 });
+    const failedAgentResult = {
+      status: "failed",
+      summary: "Coding agent produced no Git diff",
+      changed_files: [],
+      tests: [],
+      warnings: [],
+      error: "coding_agent_empty_diff",
+      diagnostics: {
+        exit_code: 0,
+        signal: null,
+        termination_reason: null,
+        stdout_excerpt: "bounded diagnostic",
+        stderr_excerpt: "",
+        stdout_truncated: false,
+        stderr_truncated: false
+      }
+    };
+    const scheduler = new DependencyScheduler({ store, runner: async () => failedAgentResult, maxRetries: 0 });
     const result = await scheduler.run(job.job_id);
     assert.equal(result.subtasks[0].status, "failed");
-    assert.equal(result.subtasks[0].error, "needs_changes");
+    assert.equal(result.subtasks[0].error, "coding_agent_empty_diff");
+    assert.equal(result.subtasks[0].result.error, "coding_agent_empty_diff");
+    assert.equal(result.subtasks[0].result.diagnostics.exit_code, 0);
+    assert.equal(result.subtasks[0].result.diagnostics.stdout_excerpt, "bounded diagnostic");
+    const persisted = await store.get(job.job_id);
+    assert.deepEqual(persisted.subtasks[0].result, result.subtasks[0].result);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

@@ -129,7 +129,8 @@
 - [x] Run2 подтвердил запуск двух Codex CLI процессов в разных Git worktree без retry; оба завершились штатно с exit code `0`, но не создали Git diff.
 - [x] Доказанный диагностический пробел закрыт: `coding_agent_empty_diff` и non-zero process result сохраняют bounded stdout/stderr excerpts, exit code, signal и termination reason.
 - [x] Диагностика редактирует secret assignments и известные token patterns до обрезки; long output и schema persistence покрыты бесплатными subprocess-тестами.
-- [ ] Причина поведения Codex внутри run2 не может быть восстановлена из старого запуска, потому что исходный executor отбросил output; один новый real pilot требует отдельного подтверждения квоты.
+- [x] Run3 доказал второй persistence-дефект: scheduler превращал failed agent result в исключение до сохранения `subtask.result`; исправлено сохранение полного validated result как для final failure, так и перед retry.
+- [ ] Причина поведения Codex внутри run2/run3 не может быть восстановлена, потому что соответствующий output не попал в job JSON; новый real pilot не разрешён в рамках текущего этапа.
 
 Все изменения ограничены подтверждёнными сценариями; security-модель trusted reviewer, ручной workflow и legacy MCP-инструменты не менялись. Авторизованный staging MCP smoke остаётся незавершённым и блокирует production deployment.
 

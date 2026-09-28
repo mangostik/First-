@@ -208,7 +208,11 @@ export class DependencyScheduler {
           controller.signal.removeEventListener("abort", rejectAbort);
         });
         entry.runnerSettled = true;
-        if (result?.status === "failed") throw new Error(result.error || "agent_result_failed");
+        if (result?.status === "failed") {
+          const failure = new Error(result.error || "agent_result_failed");
+          failure.agentResult = result;
+          throw failure;
+        }
         if (controller.signal.aborted || this.cancelled.has(jobId)) return;
         await this.store.update(jobId, job => {
           const item = job.subtasks.find(value => value.id === subtaskId);
@@ -232,7 +236,13 @@ export class DependencyScheduler {
         if (error.message !== "timeout" && attempt <= this.maxRetries) {
           await this.store.update(jobId, job => {
             const item = job.subtasks.find(value => value.id === subtaskId);
-            if (item) { item.status = "queued"; item.error = error.message; item.retry_reasons = [...(item.retry_reasons || []), error.message]; markState(item, "queued"); }
+            if (item) {
+              item.status = "queued";
+              item.error = error.message;
+              if (error.agentResult) item.result = error.agentResult;
+              item.retry_reasons = [...(item.retry_reasons || []), error.message];
+              markState(item, "queued");
+            }
             addEvent(job, "subtask_retry", { subtask_id: subtaskId, attempt, reason: error.message });
             if (error.message === "timeout") addLimitViolation(job, "subtask_timeout", { subtask_id: subtaskId, limit_ms: this.timeoutMs });
             return job;
@@ -244,6 +254,7 @@ export class DependencyScheduler {
           if (item) {
             item.status = "failed";
             item.error = error.message;
+            if (error.agentResult) item.result = error.agentResult;
             item.finished_at = new Date().toISOString();
             markState(item, "failed", item.finished_at);
             item.duration_ms = durationMs(item, Date.parse(item.finished_at));
