@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { createJob, validateFinalJobResult, validateTestEvidence } from "./schemas.js";
+import { createJob, validateAggregateResult, validateFinalJobResult, validateReviewResult, validateTestEvidence } from "./schemas.js";
 import { planTask } from "./planner.js";
 import { JsonJobStore } from "./job-store.js";
 import { createConfiguredAgentRunner } from "./agent-runner.js";
@@ -8,7 +8,7 @@ import { createConfiguredWorkspaceManager } from "./workspace.js";
 import { integrateGitChanges } from "./integrator.js";
 import { createConfiguredJobReviewer } from "./reviewer.js";
 import { createConfiguredTestRunner } from "./test-runner.js";
-import { addEvent, addLimitViolation, durationMs, markState, readOrchestrationLimits, safeLog } from "./observability.js";
+import { addEvent, addLimitViolation, durationMs, markState, readOrchestrationLimits, redactSecrets, safeLog } from "./observability.js";
 
 export class OrchestrationService {
   constructor({ store, runner, reviewer, testRunner, schedulerOptions = {}, onStatusChange, workspaceManager, planner = planTask } = {}) {
@@ -101,15 +101,32 @@ export class OrchestrationService {
       await this.setStatus(jobId, "integrating");
       if (this.cancelled.has(jobId)) return;
       job = await this.store.get(jobId);
-      const aggregate = await integrateGitChanges(job, { workspaceManager: this.workspaceManager });
-      await this.store.update(jobId, current => { if (current.status !== "cancelled") current.aggregate = aggregate; return current; });
+      let aggregate = await integrateGitChanges(job, { workspaceManager: this.workspaceManager });
+      await this.store.update(jobId, current => {
+        if (current.status !== "cancelled") current.aggregate = aggregate;
+        if (aggregate.integration?.failed_subtask_id) {
+          const failed = current.subtasks.find(item => item.id === aggregate.integration.failed_subtask_id);
+          if (failed && failed.status !== "cancelled") {
+            failed.status = "failed";
+            failed.error = aggregate.integration.error || "coding_agent_unverified_diff";
+            failed.finished_at = new Date().toISOString();
+            markState(failed, "failed", failed.finished_at);
+          }
+        }
+        return current;
+      });
       if (this.cancelled.has(jobId)) return;
       let testEvidence;
-      try {
+      if (aggregate.integration?.status !== "applied" || aggregate.changed_files.length === 0) {
+        testEvidence = validateTestEvidence({
+          status: "failed", command: "integration-gate", exit_code: 1, stdout: "", stderr: "",
+          duration_ms: 0, error: aggregate.integration?.error || "No verified integrated Git changes"
+        });
+      } else try {
         testEvidence = await this.testRunner.run({
           job,
           aggregate,
-          workspace: aggregate.workspaces[0] || null,
+          workspace: aggregate.integration?.result_workspace ? aggregate.workspaces.find(item => item.workspace_path === aggregate.integration.result_workspace) || null : null,
           signal: jobSignal
         });
       } catch (error) {
@@ -127,8 +144,42 @@ export class OrchestrationService {
       await this.store.update(jobId, current => { if (current.status !== "cancelled") current.test_evidence = testEvidence; return current; });
       await this.setStatus(jobId, "reviewing");
       if (this.cancelled.has(jobId)) return;
-      const review = await this.reviewer.review({ task: job.task, aggregate, testEvidence, signal: jobSignal });
+      let review;
+      try {
+        review = await this.reviewer.review({
+          task: job.task,
+          aggregate,
+          testEvidence,
+          workspace: aggregate.integration?.result_workspace ? aggregate.workspaces.find(item => item.workspace_path === aggregate.integration.result_workspace) || null : null,
+          verifiedDiff: aggregate.integration?.final_diff || "",
+          signal: jobSignal
+        });
+      } catch (error) {
+        const reviewerState = jobSignal?.aborted ? "cancelled" : (error?.code === "ETIMEDOUT" || error?.name === "TimeoutError" ? "timed out" : "failed");
+        const diagnostic = String(redactSecrets(error?.message || String(error))).slice(0, 500);
+        const reason = `reviewer ${reviewerState}: ${diagnostic}`;
+        aggregate = validateAggregateResult({ ...aggregate, remaining_work: [...aggregate.remaining_work, reason] });
+        await this.store.update(jobId, current => { current.aggregate = aggregate; return current; });
+        review = validateReviewResult({
+          final_decision: "rejected", reviewer_mode: this.reviewer.mode || "custom",
+          summary: reason, review_findings: [reason], approved: false
+        });
+      }
       if (this.cancelled.has(jobId)) return;
+      const readinessFindings = [];
+      if (aggregate.integration?.status !== "applied" || aggregate.changed_files.length === 0) readinessFindings.push("No verified coding-agent Git diff was integrated");
+      if (aggregate.execution_mode !== "real") readinessFindings.push("Coding result is simulation only");
+      if (testEvidence.status !== "passed") readinessFindings.push("Merged-result test gate did not pass");
+      if (aggregate.conflicts.length || aggregate.remaining_work.length) readinessFindings.push(...aggregate.conflicts, ...aggregate.remaining_work);
+      if (readinessFindings.length) {
+        review = validateReviewResult({
+          ...review,
+          final_decision: "rejected",
+          approved: false,
+          review_findings: [...review.review_findings, ...readinessFindings],
+          summary: review.summary
+        });
+      }
       const latest = await this.store.get(jobId);
       const result = validateFinalJobResult({
         ...aggregate,
@@ -137,6 +188,7 @@ export class OrchestrationService {
         test_evidence: testEvidence,
         aggregate,
         review,
+        execution_mode: aggregate.execution_mode || "simulation",
         events: latest.events,
         metrics: latest.metrics,
         limit_violations: latest.limit_violations,
@@ -144,7 +196,7 @@ export class OrchestrationService {
       });
       await this.store.update(jobId, current => { if (current.status !== "cancelled") current.result = result; return current; });
       if (this.cancelled.has(jobId)) return;
-      await this.setStatus(jobId, review.approved ? "completed" : "failed");
+      await this.setStatus(jobId, review.approved && aggregate.execution_mode === "real" ? "completed" : "failed");
     } catch (error) {
       if (this.cancelled.has(jobId)) return;
       await this.store.update(jobId, job => { job.error = error.message; addEvent(job, "job_failed", { reason: error.message }); return job; }).catch(() => {});
@@ -243,12 +295,14 @@ export class OrchestrationService {
 
   async saveFailureResult(jobId, reason) {
     const job = await this.store.get(jobId);
+    const aggregate = job.aggregate;
     const result = validateFinalJobResult({
       summary: `Job failed: ${reason}`,
-      changed_files: [], tests: [], warnings: [], conflicts: [], remaining_work: [],
-      final_decision: "rejected", review_findings: [reason], workspaces: [], aggregate: null,
+      changed_files: aggregate?.changed_files || [], tests: aggregate?.tests || [], warnings: aggregate?.warnings || [],
+      conflicts: aggregate?.conflicts || [], remaining_work: aggregate?.remaining_work || [],
+      final_decision: "rejected", review_findings: [reason, ...(aggregate?.remaining_work || [])], workspaces: aggregate?.workspaces || [], aggregate: aggregate || null,
       test_evidence: null, review: null, events: job.events, metrics: job.metrics,
-      limit_violations: job.limit_violations, duration_ms: durationMs(job)
+      limit_violations: job.limit_violations, duration_ms: durationMs(job), execution_mode: aggregate?.execution_mode || "simulation"
     });
     await this.store.update(jobId, current => { current.result = result; return current; });
   }

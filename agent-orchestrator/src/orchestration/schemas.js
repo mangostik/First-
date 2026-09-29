@@ -47,12 +47,14 @@ export function validateAgentResult(value) {
   }
   return {
     status,
+    execution_mode: value.execution_mode == null ? null : String(value.execution_mode),
+    git_verified: Boolean(value.git_verified),
     summary: asString(value.summary || "No summary", "agent result.summary"),
     changed_files: asStringArray(value.changed_files || [], "agent result.changed_files"),
     tests: asStringArray(value.tests || [], "agent result.tests"),
     warnings: asStringArray(value.warnings || [], "agent result.warnings"),
-    error: value.error == null ? null : String(value.error)
-    ,diagnostics: value.diagnostics && typeof value.diagnostics === "object" ? {
+    error: value.error == null ? null : String(value.error),
+    diagnostics: value.diagnostics && typeof value.diagnostics === "object" ? {
       exit_code: value.diagnostics.exit_code == null ? null : Number(value.diagnostics.exit_code),
       signal: value.diagnostics.signal == null ? null : String(value.diagnostics.signal),
       termination_reason: value.diagnostics.termination_reason == null ? null : String(value.diagnostics.termination_reason),
@@ -60,10 +62,10 @@ export function validateAgentResult(value) {
       stderr_excerpt: String(value.diagnostics.stderr_excerpt || ""),
       stdout_truncated: Boolean(value.diagnostics.stdout_truncated),
       stderr_truncated: Boolean(value.diagnostics.stderr_truncated)
-    } : null
-    ,timestamps: value.timestamps && typeof value.timestamps === "object" ? value.timestamps : {}
-    ,duration_ms: Number(value.duration_ms || 0)
-    ,retry_reasons: asStringArray(value.retry_reasons || [], "agent result.retry_reasons")
+    } : null,
+    timestamps: value.timestamps && typeof value.timestamps === "object" ? value.timestamps : {},
+    duration_ms: Number(value.duration_ms || 0),
+    retry_reasons: asStringArray(value.retry_reasons || [], "agent result.retry_reasons")
   };
 }
 
@@ -77,6 +79,7 @@ export function validateAggregateResult(value) {
     conflicts: asStringArray(value.conflicts || [], "aggregate.conflicts"),
     remaining_work: asStringArray(value.remaining_work || [], "aggregate.remaining_work"),
     workspaces: (value.workspaces || []).map(validateWorkspace),
+    execution_mode: value.execution_mode == null ? null : String(value.execution_mode),
     integration: value.integration == null ? null : {
       status: asString(value.integration.status, "aggregate.integration.status"),
       base_ref: asString(value.integration.base_ref, "aggregate.integration.base_ref"),
@@ -90,7 +93,8 @@ export function validateAggregateResult(value) {
       applied_files: asStringArray(value.integration.applied_files || [], "aggregate.integration.applied_files"),
       patch_bytes: Number(value.integration.patch_bytes || 0),
       final_diff: String(value.integration.final_diff || ""),
-      error: value.integration.error == null ? null : String(value.integration.error)
+      error: value.integration.error == null ? null : String(value.integration.error),
+      failed_subtask_id: value.integration.failed_subtask_id == null ? null : String(value.integration.failed_subtask_id)
     }
   };
 }
@@ -104,6 +108,7 @@ export function validateReviewResult(value) {
   }
   return {
     final_decision: finalDecision,
+    reviewer_mode: String(value.reviewer_mode || "mock"),
     summary: asString(value.summary, "review.summary"),
     review_findings: asStringArray(value.review_findings || [], "review.review_findings"),
     approved: value.approved
@@ -166,11 +171,12 @@ export function validateFinalJobResult(value) {
     workspaces: (value.workspaces || []).map(validateWorkspace),
     aggregate: value.aggregate == null ? null : validateAggregateResult(value.aggregate),
     test_evidence: value.test_evidence == null ? null : validateTestEvidence(value.test_evidence),
-    review: value.review == null ? null : validateReviewResult(value.review)
-    ,events: Array.isArray(value.events) ? value.events : []
-    ,metrics: value.metrics && typeof value.metrics === "object" ? value.metrics : {}
-    ,limit_violations: Array.isArray(value.limit_violations) ? value.limit_violations : []
-    ,duration_ms: Number(value.duration_ms || 0)
+    review: value.review == null ? null : validateReviewResult(value.review),
+    events: Array.isArray(value.events) ? value.events : [],
+    metrics: value.metrics && typeof value.metrics === "object" ? value.metrics : {},
+    limit_violations: Array.isArray(value.limit_violations) ? value.limit_violations : [],
+    duration_ms: Number(value.duration_ms || 0),
+    execution_mode: value.execution_mode == null ? null : String(value.execution_mode)
   };
 }
 
@@ -195,7 +201,8 @@ export function validateJob(value) {
     events: Array.isArray(value.events) ? value.events : [],
     metrics: value.metrics && typeof value.metrics === "object" ? value.metrics : {},
     limit_violations: Array.isArray(value.limit_violations) ? value.limit_violations : [],
-    duration_ms: Number(value.duration_ms || 0)
+    duration_ms: Number(value.duration_ms || 0),
+    execution_mode: value.execution_mode == null ? null : String(value.execution_mode)
   };
 }
 

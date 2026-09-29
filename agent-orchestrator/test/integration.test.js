@@ -65,7 +65,8 @@ test("integrator refuses same-file changes without applying either diff", async 
     await writeFile(join(a.workspace_path, "shared.txt"), "from a\n");
     await writeFile(join(b.workspace_path, "shared.txt"), "from b\n");
     const aggregate = await integrateGitChanges({ job_id: "merge-conflict", subtasks: [subtask("agent-a", a, "shared.txt"), subtask("agent-b", b, "shared.txt")] }, { workspaceManager: ctx.manager });
-    assert.equal(aggregate.integration, null);
+    assert.equal(aggregate.integration.status, "failed");
+    assert.equal(aggregate.integration.error, "coding_agent_file_conflict");
     assert.equal(aggregate.workspaces.length, 0);
     assert.match(aggregate.conflicts[0], /shared\.txt/);
   } finally { await ctx.cleanup(); }
@@ -110,5 +111,43 @@ test("service ends failed when integration reports a file conflict", async () =>
     assert.equal(job.status, "failed");
     assert.equal(job.result.final_decision, "rejected");
     assert.ok(job.aggregate.conflicts.length > 0);
+  } finally { await ctx.cleanup(); }
+});
+
+test("service tests the result worktree and preserves reviewer failure as remaining work", async () => {
+  const ctx = await fixture();
+  try {
+    let testedWorkspace;
+    const service = new OrchestrationService({
+      store: new JsonJobStore(join(ctx.repo, ".jobs-reviewer-error")),
+      workspaceManager: ctx.manager,
+      runner: async ({ workspace }) => {
+        await writeFile(join(workspace.workspace_path, "agent-change.txt"), "verified change\n");
+        return { status: "completed", execution_mode: "real", git_verified: true, summary: "changed file", changed_files: [], tests: [], warnings: [], error: null };
+      },
+      planner: () => ({ subtasks: [
+        { id: "agent-a", role: "backend", title: "a", instructions: "a", allowed_files: ["agent-change.txt"], dependencies: [], status: "queued" }
+      ], dependencies: [], required_agents: ["backend"], risk_level: "low", acceptance_criteria: [] }),
+      reviewer: { mode: "real", async review() { throw new Error(`review failed api_key=sk-1234567890${"x".repeat(700)}`); } },
+      testRunner: { mode: "real", async run({ workspace }) {
+        testedWorkspace = workspace;
+        assert.equal(workspace.subtask_id, "integrated-result");
+        assert.equal((await readFile(join(workspace.workspace_path, "agent-change.txt"), "utf8")).replaceAll("\r\n", "\n"), "verified change\n");
+        return { status: "passed", command: "result-worktree:test", exit_code: 0, stdout: "", stderr: "", duration_ms: 0, error: null };
+      } },
+      schedulerOptions: { maxRetries: 0, timeoutMs: 2_000, jobTimeoutMs: 5_000 }
+    });
+    service.baseRef = "base";
+    const created = await service.createJob("reviewer failure fixture");
+    await service.processes.get(created.job_id);
+    const job = await service.getStatus(created.job_id);
+    assert.equal(job.status, "failed");
+    assert.equal(job.test_evidence.status, "passed", JSON.stringify(job.test_evidence));
+    assert.equal(testedWorkspace.workspace_path, job.aggregate.integration.result_workspace);
+    const reviewerFailure = job.aggregate.remaining_work.find(item => item.startsWith("reviewer failed:"));
+    assert.ok(reviewerFailure);
+    assert.ok(reviewerFailure.length < 550);
+    assert.doesNotMatch(reviewerFailure, /sk-1234567890/);
+    assert.equal(job.result.review.final_decision, "rejected");
   } finally { await ctx.cleanup(); }
 });

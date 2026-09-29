@@ -24,19 +24,16 @@ test("all routed roles have explicit safe role templates", () => {
   assert.equal(Object.keys(AGENT_REGISTRY).includes("reviewer"), true);
 });
 
-test("planner chooses one role and preserves the reviewer dependency", () => {
+test("planner routes coding work without scheduling a reviewer as a coding agent", () => {
   const plan = planTask("Create a frontend dashboard screen");
-  assert.deepEqual(plan.required_agents, ["frontend", "reviewer"]);
-  assert.deepEqual(plan.subtasks.map(item => item.id), ["frontend-1", "reviewer-1"]);
-  assert.deepEqual(plan.subtasks[1].dependencies.map(item => item.subtask_id), ["frontend-1"]);
+  assert.deepEqual(plan.required_agents, ["frontend"]);
+  assert.deepEqual(plan.subtasks.map(item => item.id), ["frontend-1"]);
 });
 
-test("planner routes multiple roles independently and keeps reviewer dependent on all", () => {
+test("planner routes multiple coding roles independently", () => {
   const plan = planTask("Add an API endpoint, frontend screen, database migration, security authorization review, documentation and tests");
-  assert.deepEqual(plan.required_agents, ["backend", "qa", "frontend", "database", "security", "documentation", "reviewer"]);
-  const independent = plan.subtasks.slice(0, -1);
-  assert.ok(independent.every(item => item.dependencies.length === 0));
-  assert.deepEqual(plan.subtasks.at(-1).dependencies.map(item => item.subtask_id), independent.map(item => item.id));
+  assert.deepEqual(plan.required_agents, ["backend", "qa", "frontend", "database", "security", "documentation"]);
+  assert.ok(plan.subtasks.every(item => item.dependencies.length === 0));
 });
 
 test("unknown task gets a safe backend clarification fallback", () => {
@@ -46,7 +43,7 @@ test("unknown task gets a safe backend clarification fallback", () => {
   assert.match(plan.subtasks[0].instructions, /safe fallback/i);
 });
 
-test("independent routed roles run in parallel and reviewer waits for dependencies", async () => {
+test("independent coding roles run in parallel without putting reviewer on the coding scheduler", async () => {
   const root = await mkdtemp(join(tmpdir(), "fishcrm-role-routing-"));
   try {
     const store = new JsonJobStore(root);
@@ -72,8 +69,8 @@ test("independent routed roles run in parallel and reviewer waits for dependenci
       }
     }).run(job.job_id);
     assert.equal(maximum, 2);
-    assert.deepEqual(started.slice(-1), ["reviewer-1"]);
     assert.equal(result.subtasks.every(item => item.status === "completed"), true);
+    assert.deepEqual(started.sort(), ["database-1", "frontend-1"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

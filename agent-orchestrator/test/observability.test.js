@@ -85,7 +85,7 @@ test("service rejects a plan over max subtasks and saves the violation", async (
     const store = new JsonJobStore(root);
     const workspaceManager = new WorkspaceManager({ rootDir: join(root, "workspaces"), repoRoot: root, allowedRoot: root, git: async () => ({}) });
     const service = new OrchestrationService({ store, workspaceManager, runner: createMockAgentRunner() });
-    service.limits.maxSubtasks = 2;
+    service.limits.maxSubtasks = 1;
     const created = await service.createJob("Add an API function and tests");
     let job;
     for (let i = 0; i < 100; i += 1) {

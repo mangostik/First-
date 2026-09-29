@@ -28,16 +28,6 @@ export function planTask(task) {
       status: "queued"
     });
   });
-  const reviewerDependencies = subtasks.map(subtask => ({ subtask_id: subtask.id, required_status: "completed" }));
-  subtasks.push(validateSubtask({
-    id: "reviewer-1",
-    role: "reviewer",
-    title: AGENT_REGISTRY.reviewer.description,
-    instructions: "Review all routed role results for completeness, tests, conflicts, security, and remaining work.",
-    dependencies: reviewerDependencies,
-    status: "waiting"
-  }));
-
   return {
     subtasks,
     dependencies: subtasks.flatMap(subtask => subtask.dependencies.map(dependency => ({
@@ -45,9 +35,9 @@ export function planTask(task) {
       depends_on: dependency.subtask_id,
       required_status: dependency.required_status
     }))),
-    required_agents: [...routing.roles, "reviewer"],
+    required_agents: routing.roles,
     risk_level: "medium",
-    acceptance_criteria: [...routing.roles.map(role => `${role} task completes`), "Reviewer task completes"],
+    acceptance_criteria: routing.roles.map(role => `${role} coding task completes`),
     routing: { selected_roles: routing.roles, fallback: routing.fallback }
   };
 }

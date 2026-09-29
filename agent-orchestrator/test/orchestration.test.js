@@ -131,12 +131,11 @@ test("job store writes and reads atomically shaped JSON jobs", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("MVP planner creates parallel backend and QA plus dependent reviewer", () => {
+test("MVP planner creates parallel backend and QA coding subtasks", () => {
   const plan = planTask("Add an API function and tests");
-  assert.deepEqual(plan.subtasks.map(item => item.id), ["backend-1", "qa-1", "reviewer-1"]);
+  assert.deepEqual(plan.subtasks.map(item => item.id), ["backend-1", "qa-1"]);
   assert.deepEqual(plan.subtasks[0].dependencies, []);
   assert.deepEqual(plan.subtasks[1].dependencies, []);
-  assert.deepEqual(plan.subtasks[2].dependencies.map(item => item.subtask_id), ["backend-1", "qa-1"]);
 });
 
 const workspace = subtaskId => ({
@@ -193,9 +192,17 @@ test("real job reviewer is a separate adapter over the legacy review loop", asyn
     received = input.task;
     return { final_status: "CONSENSUS", decision: { status: "agree", ready_to_merge: true, critical_issues: [], recommended_changes: [] } };
   } });
-  const result = await reviewer.review({ task: "API task", aggregate: { summary: "ok", changed_files: [], tests: ["passed"], warnings: [], conflicts: [], remaining_work: [], workspaces: [] }, testEvidence: { status: "passed" } });
+  const result = await reviewer.review({
+    task: "API task",
+    aggregate: { summary: "ok", changed_files: ["api.js"], tests: ["passed"], warnings: [], conflicts: [], remaining_work: [], workspaces: [], integration: { final_diff: "diff --git a/api.js b/api.js" } },
+    testEvidence: { status: "passed" },
+    workspace: { workspace_path: "read-only-result" },
+    verifiedDiff: "verified result diff"
+  });
   assert.equal(reviewer.mode, "real");
   assert.match(received, /Aggregate result/);
+  assert.match(received, /read-only-result/);
+  assert.match(received, /verified result diff/);
   assert.equal(result.final_decision, "approved");
 });
 
@@ -217,7 +224,7 @@ test("runner adapters support mock and configured coding implementations", async
   await rm(root, { recursive: true, force: true });
 });
 
-test("scheduler starts independent work in parallel and respects dependencies", async () => {
+test("scheduler starts independent coding work in parallel", async () => {
   const { root, store } = await fixture();
   try {
     const job = createJob("scheduler test");
@@ -237,7 +244,7 @@ test("scheduler starts independent work in parallel and respects dependencies", 
     };
     const result = await new DependencyScheduler({ store, runner, maxParallel: 2, timeoutMs: 100, maxRetries: 0 }).run(job.job_id);
     assert.equal(result.subtasks.every(item => item.status === "completed"), true);
-    assert.deepEqual(started, ["backend-1", "qa-1", "reviewer-1"]);
+    assert.deepEqual(started.sort(), ["backend-1", "qa-1"]);
     assert.equal(maxActive, 2);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -283,13 +290,13 @@ test("scheduler retries a failed subtask once", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("scheduler fails dependent work when an upstream subtask fails", async () => {
+test("scheduler fails dependent coding work when an upstream subtask fails", async () => {
   const { root, store } = await fixture();
   try {
     const plan = planTask("Add an API function and tests");
     const job = createJob("dependency failure test");
     job.status = "running";
-    job.subtasks = plan.subtasks;
+    job.subtasks = [plan.subtasks[0], { ...plan.subtasks[1], status: "waiting", dependencies: [{ subtask_id: "backend-1" }] }];
     await store.create(job);
     const runner = async ({ subtask }) => {
       if (subtask.id === "backend-1") throw new Error("backend failed");
@@ -297,7 +304,7 @@ test("scheduler fails dependent work when an upstream subtask fails", async () =
     };
     const result = await new DependencyScheduler({ store, runner, maxParallel: 3, timeoutMs: 100, maxRetries: 0 }).run(job.job_id);
     assert.equal(result.subtasks.find(item => item.id === "backend-1").status, "failed");
-    assert.equal(result.subtasks.find(item => item.id === "reviewer-1").error, "dependency_failed");
+    assert.equal(result.subtasks.find(item => item.id === "qa-1").error, "dependency_failed");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -320,7 +327,13 @@ test("service cancellation marks an active job and its subtasks cancelled", asyn
   try {
     const service = new OrchestrationService({ store, workspaceManager, runner: createMockAgentRunner({ delayMs: 100 }), schedulerOptions: { timeoutMs: 500 } });
     const created = await service.createJob("Add an API function and tests");
-    await new Promise(resolve => setTimeout(resolve, 15));
+    let activeJob;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      activeJob = await service.getStatus(created.job_id);
+      if (activeJob.subtasks.some(item => item.status === "running")) break;
+      await new Promise(resolve => setTimeout(resolve, 2));
+    }
+    assert.ok(activeJob.subtasks.some(item => item.status === "running"), "job should have active coding work before cancellation");
     const cancelled = await service.cancelJob(created.job_id);
     assert.equal(cancelled.status, "cancelled");
     assert.equal(cancelled.subtasks.every(item => isTerminal(item.status)), true);
@@ -328,7 +341,7 @@ test("service cancellation marks an active job and its subtasks cancelled", asyn
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("service completes the non-blocking MVP job with a final result", async () => {
+test("service does not report a mock run with no Git diff as completed", async () => {
   const { root, store, workspaceManager } = await fixture();
   try {
     const history = [];
@@ -343,40 +356,58 @@ test("service completes the non-blocking MVP job with a final result", async () 
     let job;
     for (let i = 0; i < 600; i += 1) {
       job = await service.getStatus(created.job_id);
-      if (job.status === "completed") break;
+      if (["completed", "failed", "cancelled"].includes(job.status)) break;
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-    assert.equal(job.status, "completed");
-    assert.equal((await service.getResult(created.job_id)).final_decision, "approved");
+    assert.equal(job.status, "failed");
+    assert.equal((await service.getResult(created.job_id)).final_decision, "rejected");
     assert.ok(observedWorkspace.workspace_path);
     const finalResult = await service.getResult(created.job_id);
-    assert.equal(finalResult.workspaces.length, 3);
-    assert.equal(finalResult.aggregate.conflicts.length, 0);
-    assert.equal(finalResult.review.final_decision, "approved");
-    assert.equal(finalResult.test_evidence.status, "passed");
-    assert.deepEqual(history, ["planning", "running", "integrating", "reviewing", "completed"]);
+    assert.equal(finalResult.execution_mode, "simulation");
+    assert.equal(finalResult.aggregate.integration.status, "failed");
+    assert.equal(finalResult.workspaces.length, 0);
+    assert.equal(finalResult.review.final_decision, "rejected");
+    assert.equal(finalResult.test_evidence.command, "integration-gate");
+    assert.deepEqual(history, ["planning", "running", "integrating", "reviewing", "failed"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("service runs backend and QA through an injected runner in parallel and preserves workspaces", async () => {
+test("service keeps injected mock coding results parallel but fails the empty-diff integration gate", async () => {
   const { root, store, workspaceManager } = await fixture();
   try {
     const activeWorkspaces = new Set();
     let maxActive = 0;
     let active = 0;
-    const runner = async ({ workspace }) => {
+    let releaseWhenBothStarted;
+    const bothStarted = new Promise(resolve => { releaseWhenBothStarted = resolve; });
+    let started = 0;
+    const runner = async ({ workspace, signal }) => {
+        started += 1;
         active += 1;
         maxActive = Math.max(maxActive, active);
         activeWorkspaces.add(workspace.workspace_path);
-        await new Promise(resolve => setTimeout(resolve, 20));
-        active -= 1;
+        if (started === 2) releaseWhenBothStarted();
+        let onAbort;
+        try {
+          await Promise.race([
+            bothStarted,
+            new Promise((_, reject) => {
+              onAbort = () => reject(new Error("runner cancelled before both agents started"));
+              if (signal?.aborted) onAbort();
+              else signal?.addEventListener("abort", onAbort, { once: true });
+            })
+          ]);
+        } finally {
+          if (onAbort) signal?.removeEventListener("abort", onAbort);
+          active -= 1;
+        }
         return { status: "completed", summary: "injected runner", changed_files: [], tests: ["injected runner check"], warnings: [], error: null };
       };
     const service = new OrchestrationService({
       store,
       workspaceManager,
       runner,
-      schedulerOptions: { maxParallel: 2, timeoutMs: 500 },
+      schedulerOptions: { maxParallel: 2, maxRetries: 0, timeoutMs: 2_000, jobTimeoutMs: 5_000 },
       testRunner: createMockTestRunner()
     });
     const created = await service.createJob("Add an API function and tests");
@@ -389,17 +420,18 @@ test("service runs backend and QA through an injected runner in parallel and pre
       if (["completed", "failed", "cancelled"].includes(job.status)) break;
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-    assert.equal(job.status, "completed");
+    assert.equal(job.status, "failed");
     assert.equal(maxActive, 2);
-    assert.equal(activeWorkspaces.size, 3);
-    assert.equal(job.subtasks.filter(item => item.status === "completed").length, 3);
-    assert.equal(job.test_evidence.status, "passed");
-    assert.equal(job.result.aggregate.workspaces.length, 3);
-    assert.equal(job.result.review.final_decision, "approved");
+    assert.equal(activeWorkspaces.size, 2);
+    assert.equal(job.subtasks.filter(item => item.status === "completed").length, 2);
+    assert.equal(job.test_evidence.command, "integration-gate");
+    assert.equal(job.result.execution_mode, "simulation");
+    assert.equal(job.result.aggregate.workspaces.length, 0);
+    assert.equal(job.result.review.final_decision, "rejected");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("service fails after a failed project test gate and saves evidence", async () => {
+test("service skips project tests when there is no verified diff", async () => {
   const { root, store, workspaceManager } = await fixture();
   try {
     const service = new OrchestrationService({
@@ -416,6 +448,8 @@ test("service fails after a failed project test gate and saves evidence", async 
     }
     assert.equal(job.status, "failed");
     assert.equal(job.test_evidence.status, "failed");
+    assert.equal(job.test_evidence.command, "integration-gate");
+    assert.doesNotMatch(job.test_evidence.error, /project test failed/);
     assert.equal(job.result.review.final_decision, "rejected");
     assert.equal(job.result.test_evidence.status, "failed");
   } finally { await rm(root, { recursive: true, force: true }); }

@@ -365,6 +365,8 @@ export function createCodingAgentAdapter({
       }
       return {
         status: "completed",
+        execution_mode: "real",
+        git_verified: true,
         summary: `Coding agent changed ${changedFiles.length} assigned file(s)`,
         changed_files: changedFiles,
         tests: [],

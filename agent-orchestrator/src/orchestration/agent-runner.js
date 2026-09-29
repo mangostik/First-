@@ -21,6 +21,7 @@ export function createMockAgentRunner(options = {}) {
     if (attempt <= failCount) throw new Error(`mock failure for ${subtask.id}`);
     return {
       status: "completed",
+      execution_mode: "simulation",
       summary: `${subtask.role} mock completed`,
       changed_files: [],
       tests: subtask.role === "qa" ? ["mock QA checks passed"] : [],

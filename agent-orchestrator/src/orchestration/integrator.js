@@ -3,6 +3,7 @@ import { writeFile, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, relative, isAbsolute } from "node:path";
+import { redactSecrets } from "./observability.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,6 +52,11 @@ export function integrateSubtasks(job) {
   });
 }
 
+function safeDiagnostic(error) {
+  const message = error?.stderr || error?.message || error;
+  return String(redactSecrets(String(message))).slice(0, 1000);
+}
+
 function normalizePath(file) {
   return String(file).replaceAll("\\", "/").replace(/^\.\//, "");
 }
@@ -92,52 +98,84 @@ function resultWorkspaceDescriptor(workspace, integration) {
  */
 export async function integrateGitChanges(job, { workspaceManager } = {}) {
   const subtasks = Array.isArray(job?.subtasks) ? job.subtasks : [];
-  const baseRef = subtasks.find(item => item.workspace?.base_ref)?.workspace?.base_ref;
-  const candidates = subtasks.filter(item => item.status === "completed" && item.result && item.workspace?.workspace_path);
-  if (!workspaceManager || !baseRef || candidates.length === 0 || candidates.some(item => !item.result.changed_files?.length)) {
-    return integrateSubtasks(job);
-  }
+  const codingTasks = subtasks.filter(item => item.role !== "reviewer");
+  const baseRef = codingTasks.find(item => item.workspace?.base_ref)?.workspace?.base_ref;
+  const metadata = integrateSubtasks(job);
+  const sourceRefs = codingTasks.filter(item => item.workspace).map(({ id, workspace }) => ({
+    subtask_id: id,
+    branch_name: workspace.branch_name,
+    workspace_path: workspace.workspace_path
+  }));
+  const integrationFailure = (reason, { conflicts = [], remaining = [], failedSubtaskId = null } = {}) => validateAggregateResult({
+    ...metadata,
+    summary: "Coding changes were not fully integrated",
+    changed_files: [],
+    conflicts: unique([...metadata.conflicts, ...conflicts]),
+    remaining_work: unique([...metadata.remaining_work, ...remaining]),
+    workspaces: [],
+    integration: {
+      status: "failed", base_ref: String(baseRef || "unavailable"), source_refs: sourceRefs,
+      result_ref: null, result_workspace: null, applied_files: [], patch_bytes: 0,
+      final_diff: "", error: String(redactSecrets(String(reason))).slice(0, 1000), failed_subtask_id: failedSubtaskId
+    }
+  });
+  if (!workspaceManager || !baseRef) return integrationFailure("coding_agent_integration_context_missing", {
+    remaining: codingTasks.map(item => `${item.id}: no Git workspace or base ref`)
+  });
+  if (!codingTasks.length) return integrationFailure("no_coding_agent_tasks", {
+    remaining: ["coding agents: no coding subtasks were planned"]
+  });
+  const incomplete = codingTasks.filter(item => item.status !== "completed" || !item.result || !item.workspace?.workspace_path);
+  if (incomplete.length) return integrationFailure("coding_agent_incomplete", {
+    remaining: incomplete.map(item => `${item.id}: ${item.error || item.status || "missing Git workspace"}`)
+  });
 
   const sourceDiffs = [];
   const changedBy = new Map();
   const warnings = [];
   const tests = [];
-  for (const subtask of candidates) {
-    const diff = await actualDiff(subtask.workspace, baseRef);
-    const allowed = subtask.allowed_files || [];
-    const unauthorized = diff.files.filter(file => !allowedPath(file, allowed));
-    if (unauthorized.length) {
-      return validateAggregateResult({
-        ...integrateSubtasks(job),
-        conflicts: [`${subtask.id}: unauthorized Git changes: ${unauthorized.join(", ")}`],
-        warnings: [`${subtask.id}: integration refused before applying any patch`],
-        workspaces: []
+  try {
+    for (const subtask of codingTasks) {
+      const diff = await actualDiff(subtask.workspace, baseRef);
+      const allowed = subtask.allowed_files || [];
+      const unauthorized = diff.files.filter(file => !allowedPath(file, allowed));
+      if (unauthorized.length) return integrationFailure("unauthorized_changed_files", {
+        conflicts: [`${subtask.id}: unauthorized Git changes: ${unauthorized.join(", ")}`]
       });
+      if (!diff.files.length || !diff.patch.length) return integrationFailure("coding_agent_empty_diff", {
+        remaining: [`${subtask.id}: coding agent produced no verifiable Git diff`],
+        failedSubtaskId: subtask.id
+      });
+      for (const file of diff.files) {
+        if (!changedBy.has(file)) changedBy.set(file, []);
+        changedBy.get(file).push(subtask.id);
+      }
+      sourceDiffs.push({ subtask, ...diff });
+      tests.push(...(subtask.result.tests || []).map(String));
+      warnings.push(...(subtask.result.warnings || []).map(String));
     }
-    for (const file of diff.files) {
-      if (!changedBy.has(file)) changedBy.set(file, []);
-      changedBy.get(file).push(subtask.id);
-    }
-    sourceDiffs.push({ subtask, ...diff });
-    tests.push(...(subtask.result.tests || []).map(String));
-    warnings.push(...(subtask.result.warnings || []).map(String));
+  } catch (error) {
+    return integrationFailure(safeDiagnostic(error));
   }
   const conflicts = [...changedBy.entries()]
     .filter(([, owners]) => new Set(owners).size > 1)
     .map(([file, owners]) => `${file} changed by ${unique(owners).join(", ")}`);
   if (conflicts.length) {
-    return validateAggregateResult({
-      ...integrateSubtasks(job), conflicts, warnings: unique(warnings), workspaces: []
-    });
+    return integrationFailure("coding_agent_file_conflict", { conflicts });
   }
 
   const jobId = String(job.job_id || "integration");
-  const result = await workspaceManager.create({
-    jobId,
-    subtaskId: "integrated-result",
-    baseRef,
-    branchName: `orchestrator/${jobId}/integrated-result`
-  });
+  let result;
+  try {
+    result = await workspaceManager.create({
+      jobId,
+      subtaskId: "integrated-result",
+      baseRef,
+      branchName: `orchestrator/${jobId}/integrated-result`
+    });
+  } catch (error) {
+    return integrationFailure(safeDiagnostic(error));
+  }
   const integration = {
     status: "applied",
     base_ref: baseRef,
@@ -166,17 +204,18 @@ export async function integrateGitChanges(job, { workspaceManager } = {}) {
     integration.applied_files = unique(finalDiff.files);
     integration.final_diff = finalDiff.patch.toString("utf8");
     return validateAggregateResult({
-      summary: `${candidates.length}/${subtasks.length} subtasks integrated`,
+      summary: `${sourceDiffs.length}/${codingTasks.length} coding subtasks integrated`,
       changed_files: integration.applied_files,
       tests: unique(tests), warnings: unique(warnings), conflicts: [], remaining_work: [],
-      workspaces: [resultWorkspaceDescriptor(result, "applied")], integration
+      workspaces: [resultWorkspaceDescriptor(result, "applied")], integration,
+      execution_mode: sourceDiffs.every(({ subtask }) => subtask.result.execution_mode === "real" && subtask.result.git_verified) ? "real" : "simulation"
     });
   } catch (error) {
     integration.status = "failed";
-    integration.error = String(error?.stderr || error?.message || error);
+    integration.error = safeDiagnostic(error);
     await workspaceManager.cleanup(result).catch(() => {});
     return validateAggregateResult({
-      summary: `${candidates.length}/${subtasks.length} subtasks integrated`,
+      summary: `${sourceDiffs.length}/${codingTasks.length} coding subtasks integrated`,
       changed_files: [], tests: unique(tests), warnings: unique(warnings),
       conflicts: [`integration failed: ${integration.error}`], remaining_work: [], workspaces: [], integration
     });

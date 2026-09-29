@@ -13,6 +13,7 @@ export function createMockJobReviewer() {
       const approved = findings.length === 0;
       return validateReviewResult({
         final_decision: approved ? "approved" : "rejected",
+        reviewer_mode: "mock",
         summary: approved ? `Mock review approved: ${task}` : "Mock review rejected the aggregate result",
         review_findings: findings,
         approved
@@ -24,11 +25,14 @@ export function createMockJobReviewer() {
 export function createRealJobReviewer({ review = runAgentReview } = {}) {
   return {
     mode: "real",
-    async review({ task, aggregate, testEvidence, signal }) {
+    async review({ task, aggregate, testEvidence, workspace, verifiedDiff, signal }) {
       const result = await review({
         task: [
-          "Review the completed orchestration result for the original task.",
+          "Review the completed orchestration result for the original task. This is a read-only review; do not modify files.",
           task,
+          `Read-only result workspace: ${workspace?.workspace_path || "unavailable"}`,
+          "Verified Git diff from the result workspace:",
+          String(verifiedDiff || aggregate.integration?.final_diff || ""),
           "Aggregate result:",
           JSON.stringify(aggregate),
           "Project test evidence:",
@@ -50,6 +54,7 @@ export function createRealJobReviewer({ review = runAgentReview } = {}) {
         testEvidence?.status === "passed";
       return validateReviewResult({
         final_decision: approved ? "approved" : "rejected",
+        reviewer_mode: "real",
         summary: decision.status || result.final_status || "Real review completed",
         review_findings: findings,
         approved
