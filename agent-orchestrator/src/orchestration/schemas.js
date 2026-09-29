@@ -109,6 +109,9 @@ export function validateReviewResult(value) {
   return {
     final_decision: finalDecision,
     reviewer_mode: String(value.reviewer_mode || "mock"),
+    terminal_status: value.terminal_status == null ? null : String(value.terminal_status),
+    terminal_code: value.terminal_code == null ? null : String(value.terminal_code),
+    failure_reason: value.failure_reason == null ? null : String(value.failure_reason),
     summary: asString(value.summary, "review.summary"),
     review_findings: asStringArray(value.review_findings || [], "review.review_findings"),
     approved: value.approved

@@ -10,6 +10,29 @@ import { createConfiguredJobReviewer } from "./reviewer.js";
 import { createConfiguredTestRunner } from "./test-runner.js";
 import { addEvent, addLimitViolation, durationMs, markState, readOrchestrationLimits, redactSecrets, safeLog } from "./observability.js";
 
+const REVIEWER_DIAGNOSTIC_SECRET_ASSIGNMENT = /((?:api[_-]?key|authorization|token|password|secret|credential)\s*[:=]\s*)[^\r\n]*/gi;
+
+function safeReviewerReason(value) {
+  const assignedRedacted = String(value || "").replace(REVIEWER_DIAGNOSTIC_SECRET_ASSIGNMENT, "$1[REDACTED]");
+  return String(redactSecrets(assignedRedacted)).replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
+function reviewerFailureRecord(review) {
+  if (review?.final_decision === "approved" && review.approved === true && !review.terminal_code) return null;
+  const status = String(review?.terminal_status || (review?.final_decision === "rejected" ? "REJECTED" : "FAILED"))
+    .toUpperCase().replace(/[^A-Z0-9_.-]/g, "_").slice(0, 80) || "FAILED";
+  const code = String(review?.terminal_code || (status === "REJECTED" ? "REVIEW_REJECTED" : "REVIEW_FAILED"))
+    .toUpperCase().replace(/[^A-Z0-9_.-]/g, "_").slice(0, 80) || "REVIEW_FAILED";
+  const reason = safeReviewerReason(review?.failure_reason || (status === "REJECTED" ? "Reviewer rejected the result" : "Reviewer did not complete successfully"));
+  return { code, record: `reviewer [${code}/${status}]: ${reason || "Reviewer did not complete successfully"}` };
+}
+
+function appendReviewerFailure(aggregate, review) {
+  const failure = reviewerFailureRecord(review);
+  if (!failure || aggregate.remaining_work.some(item => item.startsWith(`reviewer [${failure.code}/`))) return aggregate;
+  return validateAggregateResult({ ...aggregate, remaining_work: [...aggregate.remaining_work, failure.record] });
+}
+
 export class OrchestrationService {
   constructor({ store, runner, reviewer, testRunner, schedulerOptions = {}, onStatusChange, workspaceManager, planner = planTask } = {}) {
     this.store = store || new JsonJobStore(process.env.JOB_STORAGE_DIR || join(process.cwd(), ".orchestration-jobs"));
@@ -146,26 +169,42 @@ export class OrchestrationService {
       if (this.cancelled.has(jobId)) return;
       let review;
       try {
-        review = await this.reviewer.review({
+        review = validateReviewResult(await this.reviewer.review({
           task: job.task,
           aggregate,
           testEvidence,
           workspace: aggregate.integration?.result_workspace ? aggregate.workspaces.find(item => item.workspace_path === aggregate.integration.result_workspace) || null : null,
           verifiedDiff: aggregate.integration?.final_diff || "",
           signal: jobSignal
-        });
+        }));
       } catch (error) {
-        const reviewerState = jobSignal?.aborted ? "cancelled" : (error?.code === "ETIMEDOUT" || error?.name === "TimeoutError" ? "timed out" : "failed");
-        const diagnostic = String(redactSecrets(error?.message || String(error))).slice(0, 500);
-        const reason = `reviewer ${reviewerState}: ${diagnostic}`;
-        aggregate = validateAggregateResult({ ...aggregate, remaining_work: [...aggregate.remaining_work, reason] });
-        await this.store.update(jobId, current => { current.aggregate = aggregate; return current; });
+        const cancelled = this.cancelled.has(jobId) || jobSignal?.aborted || error?.code === "MCP_REVIEW_CANCELLED";
+        const timedOut = ["ETIMEDOUT", "MCP_REVIEW_TIMEOUT", "REVIEW_LOOP_TIMEOUT", "PROVIDER_TIMEOUT"].includes(error?.code) || error?.name === "TimeoutError";
+        const terminalStatus = cancelled ? "CANCELLED" : timedOut ? "TIMEOUT" : "FAILED";
+        const terminalCode = error?.code || (cancelled ? "MCP_REVIEW_CANCELLED" : timedOut ? "REVIEW_TIMEOUT" : "REVIEW_FAILED");
+        const diagnostic = safeReviewerReason(error?.message || String(error)) || "Reviewer did not complete successfully";
+        const reason = `Reviewer ${terminalStatus.toLowerCase()}: ${diagnostic}`;
         review = validateReviewResult({
           final_decision: "rejected", reviewer_mode: this.reviewer.mode || "custom",
+          terminal_status: terminalStatus, terminal_code: terminalCode, failure_reason: diagnostic,
           summary: reason, review_findings: [reason], approved: false
         });
       }
-      if (this.cancelled.has(jobId)) return;
+      if (this.cancelled.has(jobId) || jobSignal?.aborted) {
+        review = validateReviewResult({
+          ...review,
+          final_decision: "rejected",
+          reviewer_mode: review.reviewer_mode || this.reviewer.mode || "custom",
+          terminal_status: "CANCELLED",
+          terminal_code: review.terminal_code || "MCP_REVIEW_CANCELLED",
+          failure_reason: review.failure_reason || "Review cancelled before approval",
+          review_findings: review.review_findings,
+          approved: false
+        });
+      }
+      aggregate = appendReviewerFailure(aggregate, review);
+      await this.store.update(jobId, current => { current.aggregate = aggregate; return current; });
+      if (this.cancelled.has(jobId) || jobSignal?.aborted) return;
       const readinessFindings = [];
       if (aggregate.integration?.status !== "applied" || aggregate.changed_files.length === 0) readinessFindings.push("No verified coding-agent Git diff was integrated");
       if (aggregate.execution_mode !== "real") readinessFindings.push("Coding result is simulation only");

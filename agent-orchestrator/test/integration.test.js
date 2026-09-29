@@ -10,6 +10,7 @@ import { createRealTestRunner } from "../src/orchestration/test-runner.js";
 import { WorkspaceManager } from "../src/orchestration/workspace.js";
 import { JsonJobStore } from "../src/orchestration/job-store.js";
 import { OrchestrationService } from "../src/orchestration/service.js";
+import { createMockJobReviewer, createRealJobReviewer } from "../src/orchestration/reviewer.js";
 
 const exec = promisify(execFile);
 async function git(cwd, ...args) { return exec("git", args, { cwd, windowsHide: true }); }
@@ -33,6 +34,88 @@ async function fixture() {
 function subtask(id, workspace, file, content) {
   return { id, status: "completed", allowed_files: [file], workspace, result: { status: "completed", summary: id, changed_files: [file], tests: [`${id} passed`], warnings: [], error: null } , content };
 }
+
+async function runReviewerService(reviewer, label) {
+  const ctx = await fixture();
+  try {
+    const service = new OrchestrationService({
+      store: new JsonJobStore(join(ctx.repo, `.jobs-${label}`)),
+      workspaceManager: ctx.manager,
+      runner: async ({ workspace }) => {
+        await writeFile(join(workspace.workspace_path, "reviewed-file.txt"), "verified change\n");
+        return { status: "completed", execution_mode: "real", git_verified: true, summary: "changed file", changed_files: [], tests: ["coding check passed"], warnings: [], error: null };
+      },
+      planner: () => ({ subtasks: [
+        { id: "agent-a", role: "backend", title: "change file", instructions: "change file", allowed_files: ["reviewed-file.txt"], dependencies: [], status: "queued" }
+      ], dependencies: [], required_agents: ["backend"], risk_level: "low", acceptance_criteria: [] }),
+      reviewer,
+      testRunner: { mode: "mock", async run() { return { status: "passed", command: "reviewer-fixture:test", exit_code: 0, stdout: "", stderr: "", duration_ms: 0, error: null }; } },
+      schedulerOptions: { maxRetries: 0, timeoutMs: 2_000, jobTimeoutMs: 5_000 }
+    });
+    service.baseRef = "base";
+    const created = await service.createJob(`Reviewer outcome ${label}`);
+    await service.processes.get(created.job_id);
+    return await service.getStatus(created.job_id);
+  } finally {
+    await ctx.cleanup();
+  }
+}
+
+test("approved mock Reviewer adds no remaining work", async () => {
+  const job = await runReviewerService(createMockJobReviewer(), "approved");
+  assert.equal(job.status, "completed");
+  assert.equal(job.aggregate.remaining_work.length, 0);
+  assert.equal(job.result.remaining_work.length, 0);
+});
+
+test("rejected Reviewer decision is explicit remaining work", async () => {
+  const reviewer = createRealJobReviewer({ review: async () => ({
+    final_status: "FINAL_DECISION", coverage_complete: true,
+    decision: { status: "needs_changes", ready_to_merge: false, critical_issues: ["change needed"], recommended_changes: [] }
+  }) });
+  const job = await runReviewerService(reviewer, "rejected");
+  assert.notEqual(job.status, "completed");
+  assert.ok(job.aggregate.remaining_work.some(item => item.includes("REVIEW_REJECTED") && item.includes("Reviewer rejected")));
+});
+
+test("structured Reviewer TIMEOUT is preserved in remaining work", async () => {
+  const reviewer = createRealJobReviewer({ review: async () => ({
+    final_status: "TIMEOUT", coverage_complete: false, reason: "review deadline exceeded",
+    error: { code: "MCP_REVIEW_TIMEOUT", message: "review deadline exceeded" },
+    decision: { status: "blocked", ready_to_merge: false, critical_issues: ["Review timed out"], recommended_changes: [] }
+  }) });
+  const job = await runReviewerService(reviewer, "timeout");
+  assert.notEqual(job.status, "completed");
+  assert.ok(job.aggregate.remaining_work.some(item => item.includes("MCP_REVIEW_TIMEOUT/TIMEOUT") && item.includes("deadline exceeded")));
+});
+
+test("structured Reviewer cancellation is preserved in remaining work", async () => {
+  const reviewer = createRealJobReviewer({ review: async () => ({
+    final_status: "CANCELLED", coverage_complete: false, reason: "review cancelled",
+    error: { code: "MCP_REVIEW_CANCELLED", message: "review cancelled" },
+    decision: { status: "blocked", ready_to_merge: false, critical_issues: ["Review cancelled"], recommended_changes: [] }
+  }) });
+  const job = await runReviewerService(reviewer, "cancelled");
+  assert.notEqual(job.status, "completed");
+  assert.ok(job.aggregate.remaining_work.some(item => item.includes("MCP_REVIEW_CANCELLED/CANCELLED") && item.includes("review cancelled")));
+});
+
+test("rejected Reviewer promise is normalized once and redacted", async () => {
+  const reviewer = {
+    mode: "real",
+    async review() {
+      const error = new Error("provider rejected Authorization: Bearer bearer-secret API_KEY=sk-1234567890");
+      error.code = "PROVIDER_FAILURE";
+      throw error;
+    }
+  };
+  const job = await runReviewerService(reviewer, "promise-reject");
+  assert.notEqual(job.status, "completed");
+  const records = job.aggregate.remaining_work.filter(item => item.includes("reviewer [PROVIDER_FAILURE/FAILED]"));
+  assert.equal(records.length, 1);
+  assert.doesNotMatch(records[0], /bearer-secret|sk-1234567890|API_KEY=/i);
+  assert.ok(records[0].length <= 550);
+});
 
 test("integrator applies both agent Git diffs and exposes the result ref", async () => {
   const ctx = await fixture();
@@ -144,7 +227,7 @@ test("service tests the result worktree and preserves reviewer failure as remain
     assert.equal(job.status, "failed");
     assert.equal(job.test_evidence.status, "passed", JSON.stringify(job.test_evidence));
     assert.equal(testedWorkspace.workspace_path, job.aggregate.integration.result_workspace);
-    const reviewerFailure = job.aggregate.remaining_work.find(item => item.startsWith("reviewer failed:"));
+    const reviewerFailure = job.aggregate.remaining_work.find(item => item.startsWith("reviewer [REVIEW_FAILED/FAILED]"));
     assert.ok(reviewerFailure);
     assert.ok(reviewerFailure.length < 550);
     assert.doesNotMatch(reviewerFailure, /sk-1234567890/);

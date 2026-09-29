@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JOB_STATUSES, isTerminal } from "../src/orchestration/statuses.js";
@@ -128,6 +128,46 @@ test("job store writes and reads atomically shaped JSON jobs", async () => {
     const updated = await store.update(job.job_id, value => { value.status = "planning"; return value; });
     assert.equal(updated.status, "planning");
     assert.deepEqual((await store.get(job.job_id)).job_id, job.job_id);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("job store reads wait for replacement when the Windows backup fallback has moved the file", async () => {
+  const { root, store } = await fixture();
+  try {
+    const job = createJob("serialized read during replacement");
+    await store.create(job);
+    const originalWrite = store._write.bind(store);
+    const backup = `${store.pathFor(job.job_id)}.test-backup`;
+    let enterReplacement;
+    let releaseReplacement;
+    const replacementStarted = new Promise(resolve => { enterReplacement = resolve; });
+    const replacementMayFinish = new Promise(resolve => { releaseReplacement = resolve; });
+    store._write = async next => {
+      await rename(store.pathFor(next.job_id), backup);
+      enterReplacement();
+      await replacementMayFinish;
+      try { return await originalWrite(next); }
+      finally { await rm(backup, { force: true }); }
+    };
+
+    let update;
+    try {
+      update = store.update(job.job_id, current => { current.status = "planning"; return current; });
+      await replacementStarted;
+      let readOutcome;
+      const pendingRead = store.get(job.job_id).then(
+        value => { readOutcome = { value }; return value; },
+        error => { readOutcome = { error }; throw error; }
+      );
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(readOutcome, undefined, "get must remain queued while the replacement temporarily has no destination file");
+      releaseReplacement();
+      await update;
+      assert.equal((await pendingRead).status, "planning");
+    } finally {
+      releaseReplacement();
+      if (update) await update;
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

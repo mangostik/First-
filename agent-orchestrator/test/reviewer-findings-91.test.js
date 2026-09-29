@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -18,6 +18,24 @@ import { runProviderReviewLoop } from "../src/review-loop.js";
 
 const exec = promisify(execFile);
 async function git(cwd, ...args) { return exec("git", args, { cwd, windowsHide: true }); }
+
+async function withGitFixture(run, { gitCommand = git, onRootCreated = () => {} } = {}) {
+  const root = await mkdtemp(join(tmpdir(), "fishcrm-findings-91-cancel-"));
+  try {
+    onRootCreated(root);
+    const repo = join(root, "repo");
+    await mkdir(repo);
+    await gitCommand(repo, "init", "--initial-branch=base");
+    await gitCommand(repo, "config", "user.email", "reviewer-findings@example.invalid");
+    await gitCommand(repo, "config", "user.name", "Reviewer Findings Test");
+    await writeFile(join(repo, "README.md"), "base\n");
+    await gitCommand(repo, "add", ".");
+    await gitCommand(repo, "commit", "-m", "base");
+    return await run({ root, repo });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "fishcrm-findings-91-"));
@@ -164,62 +182,66 @@ test("job store validates updater output and preserves the requested job id", as
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("Git fixture is removed when initial commit setup fails", async () => {
+  let root;
+  await assert.rejects(withGitFixture(async () => assert.fail("fixture callback must not run"), {
+    onRootCreated: value => { root = value; },
+    gitCommand: async (cwd, ...args) => {
+      if (args[0] === "commit") throw new Error("injected initial commit failure");
+      return git(cwd, ...args);
+    }
+  }), /injected initial commit failure/);
+  await assert.rejects(access(root), { code: "ENOENT" });
+});
+
 test("cancellation during test gate prevents job-level review and completion", async () => {
-  const root = await mkdtemp(join(tmpdir(), "fishcrm-findings-91-cancel-"));
-  const repo = join(root, "repo");
-  await mkdir(repo);
-  await git(repo, "init", "--initial-branch=base");
-  await git(repo, "config", "user.email", "reviewer-findings@example.invalid");
-  await git(repo, "config", "user.name", "Reviewer Findings Test");
-  await writeFile(join(repo, "README.md"), "base\n");
-  await git(repo, "add", ".");
-  await git(repo, "commit", "-m", "base");
-  const store = new JsonJobStore(join(root, "jobs"));
-  const workspaceManager = new WorkspaceManager({
-    rootDir: join(root, "workspaces"), repoRoot: repo, allowedRoot: root
+  await withGitFixture(async ({ root, repo }) => {
+    const store = new JsonJobStore(join(root, "jobs"));
+    const workspaceManager = new WorkspaceManager({
+      rootDir: join(root, "workspaces"), repoRoot: repo, allowedRoot: root
+    });
+    let service;
+    let created;
+    try {
+      let enteredGate;
+      const gateStarted = new Promise(resolve => { enteredGate = resolve; });
+      let reviewerCalls = 0;
+      service = new OrchestrationService({ store, workspaceManager, runner: async ({ workspace }) => {
+        await writeFile(join(workspace.workspace_path, "cancel-target.txt"), "verified change\n");
+        return { status: "completed", execution_mode: "real", git_verified: true, summary: "changed file", changed_files: [], tests: [], warnings: [], error: null };
+      }, planner: () => ({ subtasks: [
+        { id: "backend", role: "backend", title: "change file", instructions: "change file", allowed_files: ["cancel-target.txt"], dependencies: [], status: "queued" }
+      ], dependencies: [], required_agents: ["backend"], risk_level: "low", acceptance_criteria: [] }), testRunner: {
+        mode: "mock", run: ({ signal }) => new Promise((_, reject) => {
+          enteredGate();
+          const onAbort = () => {
+            signal.removeEventListener("abort", onAbort);
+            reject(new Error("cancelled"));
+          };
+          if (signal.aborted) onAbort();
+          else signal.addEventListener("abort", onAbort, { once: true });
+        })
+      }, reviewer: { review: async () => { reviewerCalls += 1; throw new Error("should not review"); } } });
+      service.baseRef = "base";
+      created = await service.createJob("Add an API function and tests");
+      await Promise.race([
+        gateStarted,
+        service.processes.get(created.job_id).then(() => { throw new Error("job ended before the test gate started"); })
+      ]);
+      const cancelled = await service.cancelJob(created.job_id);
+      assert.equal(cancelled.status, "cancelled");
+      assert.equal(reviewerCalls, 0);
+      assert.equal(cancelled.result.final_decision, "rejected");
+    } finally {
+      if (created && service) await service.cancelJob(created.job_id).catch(() => {});
+      const job = created ? await store.get(created.job_id).catch(() => null) : null;
+      const workspaces = [
+        ...(job?.subtasks || []).map(item => item.workspace),
+        ...(job?.aggregate?.workspaces || [])
+      ].filter(Boolean);
+      for (const workspace of workspaces.reverse()) await workspaceManager.cleanup(workspace).catch(() => {});
+    }
   });
-  let service;
-  let created;
-  try {
-    let enteredGate;
-    const gateStarted = new Promise(resolve => { enteredGate = resolve; });
-    let reviewerCalls = 0;
-    service = new OrchestrationService({ store, workspaceManager, runner: async ({ workspace }) => {
-      await writeFile(join(workspace.workspace_path, "cancel-target.txt"), "verified change\n");
-      return { status: "completed", execution_mode: "real", git_verified: true, summary: "changed file", changed_files: [], tests: [], warnings: [], error: null };
-    }, planner: () => ({ subtasks: [
-      { id: "backend", role: "backend", title: "change file", instructions: "change file", allowed_files: ["cancel-target.txt"], dependencies: [], status: "queued" }
-    ], dependencies: [], required_agents: ["backend"], risk_level: "low", acceptance_criteria: [] }), testRunner: {
-      mode: "mock", run: ({ signal }) => new Promise((_, reject) => {
-        enteredGate();
-        const onAbort = () => {
-          signal.removeEventListener("abort", onAbort);
-          reject(new Error("cancelled"));
-        };
-        if (signal.aborted) onAbort();
-        else signal.addEventListener("abort", onAbort, { once: true });
-      })
-    }, reviewer: { review: async () => { reviewerCalls += 1; throw new Error("should not review"); } } });
-    service.baseRef = "base";
-    created = await service.createJob("Add an API function and tests");
-    await Promise.race([
-      gateStarted,
-      service.processes.get(created.job_id).then(() => { throw new Error("job ended before the test gate started"); })
-    ]);
-    const cancelled = await service.cancelJob(created.job_id);
-    assert.equal(cancelled.status, "cancelled");
-    assert.equal(reviewerCalls, 0);
-    assert.equal(cancelled.result.final_decision, "rejected");
-  } finally {
-    if (created && service) await service.cancelJob(created.job_id).catch(() => {});
-    const job = created ? await store.get(created.job_id).catch(() => null) : null;
-    const workspaces = [
-      ...(job?.subtasks || []).map(item => item.workspace),
-      ...(job?.aggregate?.workspaces || [])
-    ].filter(Boolean);
-    for (const workspace of workspaces.reverse()) await workspaceManager.cleanup(workspace).catch(() => {});
-    await rm(root, { recursive: true, force: true });
-  }
 });
 
 test("schema rejects unsupported dependencies and contradictory review decisions", () => {

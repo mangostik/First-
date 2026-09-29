@@ -32,6 +32,10 @@ export class JsonJobStore {
   }
 
   async get(jobId) {
+    return this.enqueue(() => this._get(jobId));
+  }
+
+  async _get(jobId) {
     const raw = await readFile(this.pathFor(jobId), "utf8");
     return validateJob(JSON.parse(raw));
   }
@@ -94,7 +98,7 @@ export class JsonJobStore {
 
   async update(jobId, updater) {
     return this.enqueue(async () => {
-      const current = await this.get(jobId);
+      const current = await this._get(jobId);
       const next = await updater(structuredClone(current));
       if (!next || next.job_id !== current.job_id || next.job_id !== String(jobId)) {
         throw new Error("job updater cannot change job_id");

@@ -52,9 +52,14 @@ export function createRealJobReviewer({ review = runAgentReview } = {}) {
         ["agree", "approved"].includes(decision.status) && findings.length === 0 &&
         aggregate.conflicts.length === 0 && aggregate.remaining_work.length === 0 &&
         testEvidence?.status === "passed";
+      const terminalStatus = String(result.final_status || (approved ? "COMPLETED" : "FAILED"));
+      const terminalCode = result.error?.code || (approved ? null : "REVIEW_REJECTED");
       return validateReviewResult({
         final_decision: approved ? "approved" : "rejected",
         reviewer_mode: "real",
+        terminal_status: terminalStatus,
+        terminal_code: terminalCode,
+        failure_reason: approved ? null : String(result.reason || result.error?.message || "Reviewer rejected the result"),
         summary: decision.status || result.final_status || "Real review completed",
         review_findings: findings,
         approved
