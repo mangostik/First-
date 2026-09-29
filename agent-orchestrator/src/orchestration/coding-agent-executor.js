@@ -185,7 +185,7 @@ function runChild({ command, args, cwd, env, input, signal, timeoutMs, killGrace
   });
 }
 
-async function runWindowsSandboxPreflight({
+export async function runWindowsSandboxPreflight({
   command,
   workspacePath,
   windowsSandbox,
