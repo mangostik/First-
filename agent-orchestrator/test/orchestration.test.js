@@ -56,6 +56,8 @@ test("workspace manager creates distinct worktrees and rejects unsafe reuse", as
     await assert.rejects(() => workspaceManager.create({ jobId: "job-1", subtaskId: "backend-1", baseRef: "stage4-mcp" }), /already exists/);
     await assert.rejects(() => workspaceManager.create({ jobId: "../escape", subtaskId: "qa-1", baseRef: "stage4-mcp" }), /unsafe path/);
     await assert.rejects(() => workspaceManager.create({ jobId: "job-1", subtaskId: "qa-2", baseRef: "main" }), /main is forbidden/);
+    await assert.rejects(() => workspaceManager.create({ jobId: "job-1", subtaskId: "qa-3", baseRef: "stage4-mcp", branchName: "stage4-mcp" }), /protected branch/);
+    await assert.rejects(() => workspaceManager.create({ jobId: "job-1", subtaskId: "qa-4", baseRef: "stage4-mcp", branchName: "production-hardening" }), /protected branch/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

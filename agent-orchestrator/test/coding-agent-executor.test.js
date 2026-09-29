@@ -311,7 +311,8 @@ test("orchestration service schedules two isolated coding processes concurrently
       testRunner: {
         mode: "real",
         async run({ aggregate }) {
-          assert.equal(aggregate.workspaces.length, 2);
+          assert.equal(aggregate.workspaces.length, 1);
+          assert.equal(aggregate.integration.status, "applied");
           return {
             status: "passed",
             command: "controlled integration assertions",

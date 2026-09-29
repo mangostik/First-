@@ -37,7 +37,8 @@ export function createRealTestRunner({ command = ["npm", "test"], executor = exe
       const started = Date.now();
       try {
         const result = await executor(args[0], args.slice(1), { cwd: workspace?.workspace_path, signal, windowsHide: true });
-        return evidence({ status: result.exitCode === 0 ? "passed" : "failed", command: args.join(" "), exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: result.stderr, durationMs: Date.now() - started });
+        const exitCode = result.exitCode ?? result.code ?? 0;
+        return evidence({ status: exitCode === 0 ? "passed" : "failed", command: args.join(" "), exitCode, stdout: result.stdout, stderr: result.stderr, durationMs: Date.now() - started });
       } catch (error) {
         const timedOut = error?.code === "ETIMEDOUT" || error?.killed || error?.signal === "SIGTERM";
         return evidence({ status: timedOut ? "timeout" : (Number.isInteger(error?.code) ? "failed" : "error"), command: args.join(" "), exitCode: Number.isInteger(error?.code) ? error.code : null, stdout: error?.stdout, stderr: error?.stderr, durationMs: Date.now() - started, error: error?.message || String(error) });

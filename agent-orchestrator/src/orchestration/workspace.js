@@ -19,6 +19,13 @@ function rejectMainRef(ref) {
   }
 }
 
+function rejectProtectedBranch(ref) {
+  const normalized = String(ref || "").trim().toLowerCase().replace(/^refs\/heads\//, "").replace(/^origin\//, "");
+  if (["main", "master", "stage4-mcp", "production-hardening"].includes(normalized)) {
+    throw new Error(`protected branch is forbidden for workspace writes: ${normalized}`);
+  }
+}
+
 function validateId(value, name) {
   const id = String(value || "");
   if (!SAFE_ID.test(id)) throw new Error(`${name} contains an unsafe path segment`);
@@ -54,6 +61,7 @@ export class WorkspaceManager {
     const workspacePath = this.pathFor(jobId, subtaskId);
     const branch = branchName || `orchestrator/${validateId(jobId, "job_id")}/${validateId(subtaskId, "subtask_id")}`;
     rejectMainRef(branch);
+    rejectProtectedBranch(branch);
     await mkdir(dirname(workspacePath), { recursive: true });
     try {
       await mkdir(workspacePath);
@@ -97,6 +105,7 @@ export class WorkspaceManager {
     const workspacePath = resolve(String(workspace.workspace_path || ""));
     if (!isWithin(this.rootDir, workspacePath) || workspacePath === this.rootDir) throw new Error("workspace cleanup path is outside the allowed root");
     rejectMainRef(workspace.branch_name);
+    rejectProtectedBranch(workspace.branch_name);
     try {
       await access(workspacePath);
     } catch (error) {

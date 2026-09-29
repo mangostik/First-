@@ -76,7 +76,22 @@ export function validateAggregateResult(value) {
     warnings: asStringArray(value.warnings || [], "aggregate.warnings"),
     conflicts: asStringArray(value.conflicts || [], "aggregate.conflicts"),
     remaining_work: asStringArray(value.remaining_work || [], "aggregate.remaining_work"),
-    workspaces: (value.workspaces || []).map(validateWorkspace)
+    workspaces: (value.workspaces || []).map(validateWorkspace),
+    integration: value.integration == null ? null : {
+      status: asString(value.integration.status, "aggregate.integration.status"),
+      base_ref: asString(value.integration.base_ref, "aggregate.integration.base_ref"),
+      source_refs: Array.isArray(value.integration.source_refs) ? value.integration.source_refs.map(item => ({
+        subtask_id: asString(item.subtask_id, "aggregate.integration.source_refs.subtask_id"),
+        branch_name: asString(item.branch_name, "aggregate.integration.source_refs.branch_name"),
+        workspace_path: asString(item.workspace_path, "aggregate.integration.source_refs.workspace_path")
+      })) : [],
+      result_ref: value.integration.result_ref == null ? null : String(value.integration.result_ref),
+      result_workspace: value.integration.result_workspace == null ? null : String(value.integration.result_workspace),
+      applied_files: asStringArray(value.integration.applied_files || [], "aggregate.integration.applied_files"),
+      patch_bytes: Number(value.integration.patch_bytes || 0),
+      final_diff: String(value.integration.final_diff || ""),
+      error: value.integration.error == null ? null : String(value.integration.error)
+    }
   };
 }
 

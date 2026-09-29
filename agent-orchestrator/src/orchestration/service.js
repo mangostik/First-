@@ -5,7 +5,7 @@ import { JsonJobStore } from "./job-store.js";
 import { createConfiguredAgentRunner } from "./agent-runner.js";
 import { DependencyScheduler } from "./scheduler.js";
 import { createConfiguredWorkspaceManager } from "./workspace.js";
-import { integrateSubtasks } from "./integrator.js";
+import { integrateGitChanges } from "./integrator.js";
 import { createConfiguredJobReviewer } from "./reviewer.js";
 import { createConfiguredTestRunner } from "./test-runner.js";
 import { addEvent, addLimitViolation, durationMs, markState, readOrchestrationLimits, safeLog } from "./observability.js";
@@ -101,7 +101,7 @@ export class OrchestrationService {
       await this.setStatus(jobId, "integrating");
       if (this.cancelled.has(jobId)) return;
       job = await this.store.get(jobId);
-      const aggregate = integrateSubtasks(job);
+      const aggregate = await integrateGitChanges(job, { workspaceManager: this.workspaceManager });
       await this.store.update(jobId, current => { if (current.status !== "cancelled") current.aggregate = aggregate; return current; });
       if (this.cancelled.has(jobId)) return;
       let testEvidence;
