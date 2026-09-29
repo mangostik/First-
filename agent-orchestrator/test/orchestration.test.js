@@ -206,7 +206,8 @@ test("runner adapters support mock and configured coding implementations", async
   const real = createConfiguredAgentRunner({ env: {
     ORCHESTRATION_AGENT_MODE: "real",
     ORCHESTRATION_REPO_ROOT: root,
-    ORCHESTRATION_WORKSPACE_ROOT: join(root, "workspaces")
+    ORCHESTRATION_WORKSPACE_ROOT: join(root, "workspaces"),
+    ORCHESTRATION_CODING_AGENT_WINDOWS_SANDBOX: "unelevated"
   } });
   assert.equal(real.mode, "real");
   assert.equal(real.runtime, "codex");

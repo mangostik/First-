@@ -1,4 +1,6 @@
 import { execFile, spawn } from "node:child_process";
+import { rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { redactSecrets } from "./observability.js";
@@ -72,11 +74,20 @@ function buildPrompt({ subtask, workspacePath, allowedFiles }) {
   ].join("\n");
 }
 
-function codexArgs({ workspacePath, model }) {
+function normalizeWindowsSandbox(value) {
+  const sandbox = String(value || "").trim().toLowerCase();
+  if (!new Set(["elevated", "unelevated"]).has(sandbox)) {
+    throw new Error("coding agent windowsSandbox must be elevated or unelevated");
+  }
+  return sandbox;
+}
+
+export function codexArgs({ workspacePath, model, windowsSandbox }) {
   const args = [
-    "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-    "--sandbox", "workspace-write", "--cd", workspacePath, "--color", "never"
+    "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules"
   ];
+  if (windowsSandbox) args.push("--config", `windows.sandbox=${JSON.stringify(windowsSandbox)}`);
+  args.push("--sandbox", "workspace-write", "--cd", workspacePath, "--color", "never");
   if (model) args.push("--model", model);
   args.push("-");
   return args;
@@ -107,6 +118,13 @@ function processDiagnostics(processResult, excerptLimit) {
     stdout_truncated: Boolean(processResult.stdoutTruncated || stdout.truncated),
     stderr_truncated: Boolean(processResult.stderrTruncated || stderr.truncated)
   };
+}
+
+function sandboxFailureCode(processResult) {
+  const output = `${processResult.stdout || ""}\n${processResult.stderr || ""}`;
+  return /read[- ]only|access.+denied|permission.+denied|blocked by policy|policy_denied/i.test(output)
+    ? "coding_agent_sandbox_read_only"
+    : "coding_agent_sandbox_preflight_failed";
 }
 
 function runChild({ command, args, cwd, env, input, signal, timeoutMs, killGraceMs, maxOutputBytes, spawnProcess = spawn, killTree = null }) {
@@ -167,6 +185,51 @@ function runChild({ command, args, cwd, env, input, signal, timeoutMs, killGrace
   });
 }
 
+async function runWindowsSandboxPreflight({
+  command,
+  workspacePath,
+  windowsSandbox,
+  env,
+  timeoutMs,
+  killGraceMs,
+  maxOutputBytes,
+  excerptLimit
+}) {
+  const probePath = resolve(workspacePath, `.orchestration-write-probe-${randomUUID()}.tmp`);
+  const probeScript = [
+    "const fs = require('node:fs');",
+    "const path = process.argv.at(-1);",
+    "fs.writeFileSync(path, 'workspace-write-ok', { flag: 'wx' });",
+    "fs.unlinkSync(path);"
+  ].join(" ");
+  let processResult;
+  try {
+    processResult = await runChild({
+      command,
+      args: [
+        "sandbox", "--permission-profile", ":workspace",
+        "--config", `windows.sandbox=${JSON.stringify(windowsSandbox)}`,
+        "--cd", workspacePath,
+        process.execPath, "-e", probeScript, probePath
+      ],
+      cwd: workspacePath,
+      env,
+      input: "",
+      timeoutMs,
+      killGraceMs,
+      maxOutputBytes
+    });
+  } finally {
+    await rm(probePath, { force: true }).catch(() => {});
+  }
+  if (processResult.exitCode === 0 && !processResult.terminationReason) return { ok: true };
+  return {
+    ok: false,
+    error: sandboxFailureCode(processResult),
+    diagnostics: processDiagnostics(processResult, excerptLimit)
+  };
+}
+
 export function createCodingAgentAdapter({
   command = "codex",
   model = "",
@@ -180,7 +243,9 @@ export function createCodingAgentAdapter({
   gitChangedFiles = defaultGitChangedFiles,
   killTree = null,
   env = process.env,
-  extraEnv = {}
+  extraEnv = {},
+  windowsSandbox = null,
+  sandboxPreflight = null
 } = {}) {
   const root = resolve(String(workspaceRoot || ""));
   if (!workspaceRoot) throw new Error("coding agent workspaceRoot is required");
@@ -189,9 +254,13 @@ export function createCodingAgentAdapter({
   const boundedOutputBytes = finitePositive(maxOutputBytes, 64 * 1024, "coding agent maxOutputBytes");
   const boundedDiagnosticChars = finitePositive(diagnosticExcerptChars, 2_048, "coding agent diagnosticExcerptChars");
   const executable = basename(String(command)).toLowerCase();
-  if (!new Set(["codex", "codex.exe"]).has(executable) && argsBuilder === codexArgs) {
+  const usesCodexRuntime = new Set(["codex", "codex.exe"]).has(executable) && argsBuilder === codexArgs;
+  if (!usesCodexRuntime && argsBuilder === codexArgs) {
     throw new Error("unsupported coding agent runtime");
   }
+  const configuredWindowsSandbox = usesCodexRuntime && process.platform === "win32"
+    ? normalizeWindowsSandbox(windowsSandbox)
+    : null;
 
   return {
     mode: "real",
@@ -218,9 +287,44 @@ export function createCodingAgentAdapter({
         ORCHESTRATION_WORKSPACE_PATH: workspacePath,
         ORCHESTRATION_ALLOWED_FILES: JSON.stringify(allowedFiles)
       });
+      const preflight = sandboxPreflight || (usesCodexRuntime && process.platform === "win32"
+        ? runWindowsSandboxPreflight
+        : null);
+      if (preflight) {
+        const preflightResult = await preflight({
+          command,
+          workspacePath,
+          windowsSandbox: configuredWindowsSandbox,
+          env: childEnv,
+          timeoutMs: Math.min(boundedTimeoutMs, 15_000),
+          killGraceMs: boundedKillGraceMs,
+          maxOutputBytes: boundedOutputBytes,
+          excerptLimit: boundedDiagnosticChars
+        });
+        if (!preflightResult?.ok) {
+          const completedAt = new Date().toISOString();
+          return {
+            status: "failed",
+            summary: "Coding agent sandbox preflight denied workspace writes",
+            changed_files: [],
+            tests: [],
+            warnings: [],
+            error: preflightResult?.error || "coding_agent_sandbox_preflight_failed",
+            ...(preflightResult?.diagnostics ? { diagnostics: preflightResult.diagnostics } : {}),
+            timestamps: { started: startedAt, completed: completedAt },
+            duration_ms: Date.parse(completedAt) - Date.parse(startedAt)
+          };
+        }
+      }
       const processResult = await runChild({
         command,
-        args: argsBuilder({ workspacePath, model, allowedFiles, subtask }),
+        args: argsBuilder({
+          workspacePath,
+          model,
+          allowedFiles,
+          subtask,
+          windowsSandbox: configuredWindowsSandbox
+        }),
         cwd: workspacePath,
         env: childEnv,
         input: prompt,
@@ -282,6 +386,7 @@ export function createConfiguredCodingAgent({ env = process.env } = {}) {
     workspaceRoot,
     timeoutMs: env.ORCHESTRATION_CODING_AGENT_TIMEOUT_MS || env.ORCHESTRATION_TIMEOUT_MS || 120_000,
     killGraceMs: env.ORCHESTRATION_CODING_AGENT_KILL_GRACE_MS || 5_000,
+    windowsSandbox: env.ORCHESTRATION_CODING_AGENT_WINDOWS_SANDBOX || null,
     env
   });
 }

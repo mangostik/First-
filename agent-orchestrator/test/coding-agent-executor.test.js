@@ -6,7 +6,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createCodingAgentAdapter } from "../src/orchestration/coding-agent-executor.js";
+import { codexArgs, createCodingAgentAdapter } from "../src/orchestration/coding-agent-executor.js";
 import { JsonJobStore } from "../src/orchestration/job-store.js";
 import { validateAgentResult } from "../src/orchestration/schemas.js";
 import { OrchestrationService } from "../src/orchestration/service.js";
@@ -79,6 +79,84 @@ test("coding agent records a real Git change from its assigned workspace", async
     assert.equal(result.status, "completed");
     assert.deepEqual(result.changed_files, ["agent-one.txt"]);
     assert.match(await readFile(join(workspace.workspace_path, "agent-one.txt"), "utf8"), /Create agent-one\.txt/);
+  } finally { await ctx.cleanup(); }
+});
+
+test("Codex runtime keeps workspace-write while selecting an explicit Windows sandbox backend", () => {
+  const args = codexArgs({
+    workspacePath: "C:\\bounded-worktree",
+    model: "",
+    windowsSandbox: "unelevated"
+  });
+  assert.deepEqual(args.slice(0, 8), [
+    "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+    "--config", "windows.sandbox=\"unelevated\"", "--sandbox", "workspace-write"
+  ]);
+});
+
+test("native Windows Codex runtime fails closed without an explicit sandbox backend", () => {
+  if (process.platform !== "win32") return;
+  assert.throws(
+    () => createCodingAgentAdapter({ command: "codex", workspaceRoot: "C:\\bounded-root" }),
+    /windowsSandbox must be elevated or unelevated/
+  );
+});
+
+test("read-only sandbox preflight fails before the model process starts", async () => {
+  const ctx = await fixture();
+  let modelSpawns = 0;
+  try {
+    const workspace = await ctx.createWorkspace("job-read-only", "agent-read-only");
+    const runner = createCodingAgentAdapter({
+      command: "codex",
+      workspaceRoot: ctx.workspaces,
+      windowsSandbox: "unelevated",
+      sandboxPreflight: async () => ({
+        ok: false,
+        error: "coding_agent_sandbox_read_only",
+        diagnostics: {
+          exit_code: 1,
+          signal: null,
+          termination_reason: null,
+          stdout_excerpt: "",
+          stderr_excerpt: "sandbox: read-only; write blocked by policy",
+          stdout_truncated: false,
+          stderr_truncated: false
+        }
+      }),
+      spawnProcess: () => {
+        modelSpawns += 1;
+        throw new Error("model process must not start");
+      }
+    });
+    const result = await runner.run({
+      subtask: subtask("agent-read-only", "blocked.txt"),
+      workspace
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(result.error, "coding_agent_sandbox_read_only");
+    assert.equal(modelSpawns, 0);
+    await assert.rejects(access(join(workspace.workspace_path, "blocked.txt")));
+  } finally { await ctx.cleanup(); }
+});
+
+test("writable preflight allows the controlled local agent to modify its workspace", async () => {
+  const ctx = await fixture();
+  let preflightVerified = false;
+  try {
+    const workspace = await ctx.createWorkspace("job-preflight-write", "agent-write");
+    const result = await adapter(ctx.workspaces, {}, 2_000, {
+      sandboxPreflight: async ({ workspacePath }) => {
+        const probe = join(workspacePath, ".controlled-write-probe");
+        await writeFile(probe, "ok", "utf8");
+        await rm(probe);
+        preflightVerified = true;
+        return { ok: true };
+      }
+    }).run({ subtask: subtask("agent-write", "written.txt"), workspace });
+    assert.equal(preflightVerified, true);
+    assert.equal(result.status, "completed");
+    assert.deepEqual(result.changed_files, ["written.txt"]);
   } finally { await ctx.cleanup(); }
 });
 
