@@ -37,7 +37,10 @@
 
 - [x] Adapter-интерфейс agent runner.
 - [x] Конфигурация mock/real runner.
-- [x] Подключение существующего Claude/OpenAI review loop как real runner.
+- [x] Существующий Claude/OpenAI review loop сохранён как reviewer; он больше не выдаётся за coding-agent executor.
+- [x] Минимальный настоящий coding-agent executor запускает локальный Codex CLI в cwd отдельного worktree, передаёт точный список разрешённых файлов и проверяет фактический Git diff.
+- [x] Пустой diff, изменение вне file boundary, попытка работы с `main`, ненулевой exit code, timeout и cancel не считаются успешным выполнением.
+- [x] Timeout/cancel coding-процесса удерживает scheduler slot до закрытия дочернего процесса; перекрывающий retry не начинается.
 - [x] Per-request timeout для Claude/OpenAI: по `120000` мс по умолчанию; общий GitHub timeout не увеличивается.
 - [x] Ограниченные provider retries для 429/5xx и structured-output retries с явной причиной остановки.
 - [x] AbortSignal/cancellation для provider requests и гарантированный structured failure JSON при timeout/error.
@@ -46,8 +49,7 @@
 - [x] Оптимизирован review loop: один обязательный раунд по всем chunks, follow-up только для проблемных chunks, guard перед новым provider call и partial result при неполном покрытии; `ready_to_merge=false` до полного покрытия.
 - [x] Deterministic mock runner для тестов.
 - [x] Cost-aware review modes: `cheap` по умолчанию, `standard` для рискованных chunks и ручной `deep`; лимиты chunks/provider calls/output tokens/time/estimated cost, redacted usage metrics и structured `COST_LIMIT` partial result.
-- [x] Reviewer hardening: неполное покрытие всегда блокирует `ready_to_merge`, progress checkpoint записывается атомарно, а `reviewEvents` ограничен `REVIEW_MAX_EVENTS`.
-- [x] Реальный параллельный запуск двух независимых agent tasks через текущий scheduler с default `concurrency=2`.
+- [partial] Реальный параллельный запуск двух независимых coding-agent tasks: executor и управляемые subprocess/worktree tests готовы; один живой Codex CLI pilot ожидает отдельного подтверждения расхода account quota.
 - [x] Real runner получает отдельный workspace descriptor каждой подзадачи; автоматический merge отсутствует.
 - [x] Opt-in real-runner smoke test добавлен и отключён по умолчанию.
 - [x] Integration lifecycle tests: `create → planning → running → completed/failed`.
@@ -99,5 +101,38 @@
 - [ ] Railway/Plugin проверка после отдельного разрешения.
 
 ## Текущий этап
+
+### PR #7: доказательный разбор Agent Review #91
+
+- [x] Конфликты с актуальным `stage4-mcp` сведены с сохранением ручного trusted reviewer и mock-only CI.
+- [x] Подтверждённые findings закрыты regression-тестами: non-approved real agent result, межjobная отмена scheduler, timeout без перекрывающего retry, обход лимитов через options, отмена после scheduling, противоречивые схемы, provider timeout race, невалидный review deadline и smoke cleanup.
+- [x] Псевдодефекты не исправлялись: tracker авторизует запросы в `ReadOnlyTracker.handle`; неполное cheap coverage уже блокируется в aggregate.
+- [x] В полном локальном test suite обнаружена и исправлена нестабильность SSE-теста: ожидание события теперь ограничено дедлайном, а stream закрывается в `finally`.
+- [ ] Merge PR #7, production deployment и реальные provider calls остаются отдельными решениями; test gate и CI обязательны перед обсуждением merge.
+
+### Адресный аудит восьми findings Agent Review #92
+
+- [x] Tracker authorization: ложное срабатывание. `mcp-server.js` передаёт tracker первым, но `ReadOnlyTracker.handle` сам проверяет bearer/cookie до store/API операций; добавлена regression-проверка Secure cookie.
+- [x] Runner timeout/cancel: подтверждённый риск. Scheduler теперь не освобождает active slot до settle runner, не продолжает pipeline после timeout и не повторяет timed-out attempt; добавлен regression-тест с runner, игнорирующим AbortSignal.
+- [x] `JsonJobStore.update`: подтверждённый дефект. Результат updater теперь повторно валидируется и не может изменить `job_id`; добавлен regression-тест.
+- [x] Numeric limits/deadlines: подтверждённый edge case. Некорректный explicit MCP deadline отклоняется до запуска child process; scheduler использует конечные безопасные fallback-значения.
+- [x] Dependency/deadlock race: подтверждённый риск. Dependency updates выполняются через актуальный serialized store snapshot, а deadlock проверяется после повторного чтения состояния.
+- [x] Cancellation state/already-aborted signal: подтверждённый edge case. Cancellation marker очищается после обработки, `withTestTimeout` учитывает уже отменённый parent signal.
+- [x] Workspace cleanup: подтверждённый edge case. Cleanup применяет ту же нормализацию `main` refs, что и создание workspace.
+- [x] Tracker cookie: подтверждённое hardening-замечание. Cookie теперь получает `Secure` по умолчанию с явным env override только для локального HTTP.
+- [x] Исправления `75bd116` перенесены в существующий PR #7 без отдельного PR; итоговая ветка содержит исходный PR7 (`04afb62`) и hardening-изменения.
+- [partial] Agent Orchestrator CI: pull-request run на актуальном checkpoint зелёный; один push-run упал на шаге orchestration tests без доступного подробного лога, поэтому причина не доказана. Staging deployment для актуального SHA запущен, финальный статус и smoke ещё не подтверждены.
+- [ ] Авторизованный staging MCP smoke остаётся незавершённым: режимы и токены не проверены, production deployment не разрешён.
+
+### Локальный coding-agent pilot
+
+- [x] Run2 подтвердил запуск двух Codex CLI процессов в разных Git worktree без retry; оба завершились штатно с exit code `0`, но не создали Git diff.
+- [x] Доказанный диагностический пробел закрыт: `coding_agent_empty_diff` и non-zero process result сохраняют bounded stdout/stderr excerpts, exit code, signal и termination reason.
+- [x] Диагностика редактирует secret assignments и известные token patterns до обрезки; long output и schema persistence покрыты бесплатными subprocess-тестами.
+- [x] Run3 доказал второй persistence-дефект: scheduler превращал failed agent result в исключение до сохранения `subtask.result`; исправлено сохранение полного validated result как для final failure, так и перед retry.
+- [ ] Причина поведения Codex внутри run2/run3 не может быть восстановлена, потому что соответствующий output не попал в job JSON; новый real pilot не разрешён в рамках текущего этапа.
+
+Все изменения ограничены подтверждёнными сценариями; security-модель trusted reviewer, ручной workflow и legacy MCP-инструменты не менялись. Авторизованный staging MCP smoke остаётся незавершённым и блокирует production deployment.
+
 
 Этап observability/limits и read-only web tracker реализованы и подтверждены зелёными CI runs #12/#13. Этап расширения role registry и Planner routing завершён и подтверждён зелёными CI runs #14 (push) и #15 (pull request). Production hardening подготовлен; merge/deployment не выполнялись. Provider review теперь поддерживает cost-aware режимы `cheap`/`standard`/`deep`: по умолчанию Claude делает один проход, OpenAI подключается только к findings и финальному adjudication, а provider calls, chunks, output tokens, time и estimated cost ограничены конфигурацией. Лимиты возвращают structured `COST_LIMIT` с usage metrics, partial result и `ready_to_merge=false`; mock CI не выполняет реальные provider calls. Автоматический review убран с `pull_request.synchronize`, поэтому review не повторяется на каждый push; `deep` доступен только через ручной `workflow_dispatch`. Существующий deadline/AbortSignal/retry/structured recovery path сохранён. MCP-level deadline `MCP_REVIEW_DEADLINE_MS=240000`, checkpoint прогресса и asynchronous orchestration tools остаются без изменений. Production deployment остаётся отдельным этапом и требует явного подтверждения.

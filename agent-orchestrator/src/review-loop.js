@@ -54,8 +54,10 @@ export async function runProviderReviewLoop({ task, chunks, config, promptBuilde
   const maxOutputTokens = Math.max(1, Number(config.maxOutputTokens || 1));
   const estimatedCostPer1k = Math.max(0, Number(config.estimatedCostPer1kTokensUsd || 0));
   const costBudgetUsd = Number.isFinite(Number(config.costBudgetUsd)) ? Math.max(0, Number(config.costBudgetUsd)) : Infinity;
-  const configuredTimeBudgetMs = Number(config.reviewTimeBudgetMs || config.reviewLoopTimeoutMs);
-  const deadlineMs = Math.min(Number(config.reviewLoopTimeoutMs), configuredTimeBudgetMs);
+  const positiveMs = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback;
+  const loopBudgetMs = positiveMs(config.reviewLoopTimeoutMs, 600000);
+  const configuredTimeBudgetMs = positiveMs(config.reviewTimeBudgetMs, loopBudgetMs);
+  const deadlineMs = Math.min(loopBudgetMs, configuredTimeBudgetMs);
   const deadlineAt = Date.now() + deadlineMs;
   const guardMs = Number(config.reviewLoopGuardMs || 1000);
   const startedAt = Date.now();
