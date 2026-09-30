@@ -17,6 +17,24 @@ function safeReviewerReason(value) {
   return String(redactSecrets(assignedRedacted)).replace(/\s+/g, " ").trim().slice(0, 500);
 }
 
+function safeReviewerCode(value) {
+  return String(value || "").toUpperCase().replace(/[^A-Z0-9_.-]/g, "_").slice(0, 80) || null;
+}
+
+function sanitizeReviewerResult(review) {
+  const findings = review.review_findings.length > 100
+    ? [...review.review_findings.slice(0, 99), `${review.review_findings.length - 99} additional findings omitted`]
+    : review.review_findings;
+  return validateReviewResult({
+    ...review,
+    terminal_status: safeReviewerCode(review.terminal_status),
+    terminal_code: safeReviewerCode(review.terminal_code),
+    failure_reason: review.failure_reason == null ? null : safeReviewerReason(review.failure_reason) || "Reviewer failure details redacted",
+    summary: safeReviewerReason(review.summary) || "Reviewer summary redacted",
+    review_findings: findings.map(item => safeReviewerReason(item) || "Reviewer finding redacted")
+  });
+}
+
 function reviewerFailureRecord(review) {
   if (review?.final_decision === "approved" && review.approved === true && !review.terminal_code) return null;
   const status = String(review?.terminal_status || (review?.final_decision === "rejected" ? "REJECTED" : "FAILED"))
@@ -202,6 +220,7 @@ export class OrchestrationService {
           approved: false
         });
       }
+      review = sanitizeReviewerResult(review);
       aggregate = appendReviewerFailure(aggregate, review);
       await this.store.update(jobId, current => { current.aggregate = aggregate; return current; });
       if (this.cancelled.has(jobId) || jobSignal?.aborted) return;
@@ -219,6 +238,7 @@ export class OrchestrationService {
           summary: review.summary
         });
       }
+      review = sanitizeReviewerResult(review);
       const latest = await this.store.get(jobId);
       const result = validateFinalJobResult({
         ...aggregate,

@@ -79,14 +79,22 @@ test("rejected Reviewer decision is explicit remaining work", async () => {
 });
 
 test("structured Reviewer TIMEOUT is preserved in remaining work", async () => {
+  const credential = "reviewer-fixture-secret-marker";
   const reviewer = createRealJobReviewer({ review: async () => ({
-    final_status: "TIMEOUT", coverage_complete: false, reason: "review deadline exceeded",
-    error: { code: "MCP_REVIEW_TIMEOUT", message: "review deadline exceeded" },
-    decision: { status: "blocked", ready_to_merge: false, critical_issues: ["Review timed out"], recommended_changes: [] }
+    final_status: "TIMEOUT", coverage_complete: false, reason: `Authorization: Bearer ${credential}`,
+    error: { code: "MCP_REVIEW_TIMEOUT", message: `Authorization: Bearer ${credential}` },
+    decision: {
+      status: "blocked", ready_to_merge: false,
+      critical_issues: [`Review timed out: Authorization: Bearer ${credential}`],
+      recommended_changes: [`API_KEY=${credential}`]
+    }
   }) });
   const job = await runReviewerService(reviewer, "timeout");
   assert.notEqual(job.status, "completed");
-  assert.ok(job.aggregate.remaining_work.some(item => item.includes("MCP_REVIEW_TIMEOUT/TIMEOUT") && item.includes("deadline exceeded")));
+  assert.ok(job.aggregate.remaining_work.some(item => item.includes("MCP_REVIEW_TIMEOUT/TIMEOUT") && item.includes("REDACTED")));
+  assert.equal(job.result.review.failure_reason.includes(credential), false);
+  assert.equal(job.result.review.review_findings.some(item => item.includes(credential)), false);
+  assert.equal(JSON.stringify(job.result.review).includes(credential), false);
 });
 
 test("structured Reviewer cancellation is preserved in remaining work", async () => {
@@ -115,6 +123,7 @@ test("rejected Reviewer promise is normalized once and redacted", async () => {
   assert.equal(records.length, 1);
   assert.doesNotMatch(records[0], /bearer-secret|sk-1234567890|API_KEY=/i);
   assert.ok(records[0].length <= 550);
+  assert.doesNotMatch(JSON.stringify(job.result.review), /bearer-secret|sk-1234567890|API_KEY=/i);
 });
 
 test("integrator applies both agent Git diffs and exposes the result ref", async () => {
