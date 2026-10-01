@@ -54,17 +54,32 @@ test("independent coding roles run in parallel without putting reviewer on the c
     let active = 0;
     let maximum = 0;
     const started = [];
+    let releaseWhenBothStarted;
+    const bothStarted = new Promise(resolve => { releaseWhenBothStarted = resolve; });
     const result = await new DependencyScheduler({
       store,
       maxParallel: 2,
-      timeoutMs: 100,
+      timeoutMs: 5_000,
       maxRetries: 0,
-      runner: async ({ subtask }) => {
+      runner: async ({ subtask, signal }) => {
         started.push(subtask.id);
         active += 1;
         maximum = Math.max(maximum, active);
-        await new Promise(resolve => setTimeout(resolve, 10));
-        active -= 1;
+        if (started.length === 2) releaseWhenBothStarted();
+        let onAbort;
+        try {
+          await Promise.race([
+            bothStarted,
+            new Promise((_, reject) => {
+              onAbort = () => reject(new Error("runner cancelled before both roles started"));
+              if (signal?.aborted) onAbort();
+              else signal?.addEventListener("abort", onAbort, { once: true });
+            })
+          ]);
+        } finally {
+          if (onAbort) signal?.removeEventListener("abort", onAbort);
+          active -= 1;
+        }
         return { status: "completed", summary: `${subtask.role} complete`, changed_files: [], tests: [`${subtask.role} test passed`], warnings: [], error: null };
       }
     }).run(job.job_id);

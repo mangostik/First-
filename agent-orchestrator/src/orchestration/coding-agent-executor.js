@@ -66,8 +66,9 @@ function buildPrompt({ subtask, workspacePath, allowedFiles }) {
     "You are a coding agent executing one bounded task.",
     `Task: ${subtask.instructions}`,
     `Workspace: ${workspacePath}`,
-    "You may modify only these repository-relative files:",
+    "This task is limited to these repository-relative files (acceptance rule; not an OS-enforced file sandbox):",
     ...allowedFiles.map(file => `- ${file}`),
+    "The orchestrator checks the actual Git diff before integration; any changed path outside this list rejects the entire result and none of that result is applied to the result workspace.",
     "Work only in the provided workspace. Do not access parent directories, main, other worktrees, secrets, or network credentials.",
     "Do not commit, merge, push, or change Git configuration.",
     "Make the requested file changes and run only the smallest relevant local checks."
