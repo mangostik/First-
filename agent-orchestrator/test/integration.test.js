@@ -11,6 +11,7 @@ import { WorkspaceManager } from "../src/orchestration/workspace.js";
 import { JsonJobStore } from "../src/orchestration/job-store.js";
 import { OrchestrationService } from "../src/orchestration/service.js";
 import { createMockJobReviewer, createRealJobReviewer } from "../src/orchestration/reviewer.js";
+import { registerOrchestrationTools } from "../src/mcp-server.js";
 
 const exec = promisify(execFile);
 async function git(cwd, ...args) { return exec("git", args, { cwd, windowsHide: true }); }
@@ -241,5 +242,88 @@ test("service tests the result worktree and preserves reviewer failure as remain
     assert.ok(reviewerFailure.length < 550);
     assert.doesNotMatch(reviewerFailure, /sk-1234567890/);
     assert.equal(job.result.review.final_decision, "rejected");
+  } finally { await ctx.cleanup(); }
+});
+
+test("test-runner secrets never reach stored job JSON, Reviewer input, or MCP result", async () => {
+  const ctx = await fixture();
+  try {
+    const envSecret = "synthetic-test-env-secret-7f91";
+    const outputSecret = "synthetic-test-output-secret-2a43";
+    const errorSecret = "synthetic-test-error-secret-9b16";
+    let invocation = 0;
+    const realRunner = createRealTestRunner({
+      env: {
+        PATH: process.env.PATH,
+        OPENAI_API_KEY: envSecret,
+        CUSTOM_TEST_SECRET: "synthetic-extra-env-secret-51d0",
+        TEST_OUTPUT_SECRET: outputSecret,
+        TEST_ERROR_SECRET: errorSecret
+      },
+      executor: async () => {
+        invocation += 1;
+        if (invocation === 1) return {
+          exitCode: 1,
+          stdout: `ordinary test failure; marker=${outputSecret}`,
+          stderr: `ordinary test diagnostic; marker=${outputSecret}`
+        };
+        const error = new Error(`spawn diagnostic marker=${errorSecret}`);
+        error.code = "ENOENT";
+        error.stdout = `partial stdout marker=${errorSecret}`;
+        error.stderr = `partial stderr marker=${errorSecret}`;
+        throw error;
+      }
+    });
+    const reviewerInputs = [];
+    const service = new OrchestrationService({
+      store: new JsonJobStore(join(ctx.repo, ".jobs-secret-redaction")),
+      workspaceManager: ctx.manager,
+      runner: async ({ workspace }) => {
+        await writeFile(join(workspace.workspace_path, "reviewed-file.txt"), "verified change\n");
+        return { status: "completed", execution_mode: "real", git_verified: true, summary: "file changed", changed_files: [], tests: ["coding tests passed"], warnings: [], error: null };
+      },
+      planner: () => ({ subtasks: [
+        { id: "agent-a", role: "backend", title: "change file", instructions: "change file", allowed_files: ["reviewed-file.txt"], dependencies: [], status: "queued" }
+      ], dependencies: [], required_agents: ["backend"], risk_level: "low", acceptance_criteria: [] }),
+      reviewer: { mode: "mock", async review({ testEvidence }) {
+        reviewerInputs.push(structuredClone(testEvidence));
+        return { final_decision: "rejected", summary: "test evidence reviewed", review_findings: ["Project test gate did not pass"], approved: false };
+      } },
+      testRunner: { mode: "real", run: context => realRunner.run(context) },
+      schedulerOptions: { maxRetries: 0, timeoutMs: 2_000, jobTimeoutMs: 5_000 }
+    });
+    service.baseRef = "base";
+
+    const jobs = [];
+    for (const task of ["test output secret redaction", "test error secret redaction"]) {
+      const created = await service.createJob(task);
+      await service.processes.get(created.job_id);
+      jobs.push({ id: created.job_id, status: await service.getStatus(created.job_id), result: await service.getResult(created.job_id) });
+    }
+
+    assert.equal(jobs[0].status.test_evidence.status, "failed");
+    assert.match(jobs[0].result.test_evidence.stdout, /ordinary test failure/);
+    assert.match(jobs[0].result.test_evidence.stderr, /ordinary test diagnostic/);
+    assert.equal(jobs[1].status.test_evidence.status, "error");
+    assert.match(jobs[1].result.test_evidence.error, /spawn diagnostic/);
+    assert.equal(reviewerInputs.length, 2);
+
+    const handlers = {};
+    registerOrchestrationTools({ registerTool(name, _metadata, handler) { handlers[name] = handler; } }, service);
+    const mcpResults = await Promise.all(jobs.map(({ id }) => handlers.get_job_result({ job_id: id })));
+    const persisted = await Promise.all(jobs.map(({ id }) => readFile(service.store.pathFor(id), "utf8")));
+    const exposed = JSON.stringify({ jobs, reviewerInputs, mcpResults, persisted });
+    for (const marker of [envSecret, outputSecret, errorSecret, "synthetic-extra-env-secret-51d0"]) {
+      assert.equal(exposed.includes(marker), false, `secret marker leaked: ${marker}`);
+    }
+    assert.match(exposed, /REDACTED/);
+    assert.match(exposed, /ordinary test failure/);
+    assert.match(exposed, /ordinary test diagnostic/);
+    assert.match(exposed, /spawn diagnostic/);
+    for (const mcpResult of mcpResults) {
+      assert.equal(mcpResult.isError, undefined);
+      assert.doesNotMatch(mcpResult.content[0].text, /synthetic-(?:test|extra-env)-.*-secret/);
+    }
+    for (const evidence of reviewerInputs) assert.doesNotMatch(JSON.stringify(evidence), /synthetic-(?:test|extra-env)-.*-secret/);
   } finally { await ctx.cleanup(); }
 });

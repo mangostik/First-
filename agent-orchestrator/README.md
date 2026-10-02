@@ -192,7 +192,9 @@ Each orchestration subtask now receives a separate Git worktree under `ORCHESTRA
 
 After all subtasks finish, the Integrator aggregates changed files, tests, warnings, conflicts, remaining work, and workspace descriptors without merging branches. A job-level Reviewer then returns `approved` or `rejected` with `review_findings`; the job is `completed` only after approval, otherwise it is `failed`. `ORCHESTRATION_REVIEWER_MODE=mock` is the safe default; `real` delegates review through the existing `runAgentReview` adapter.
 
-Before job-level review, the project test gate runs and stores `test_evidence` with status `passed`, `failed`, `timeout`, or `error`, plus command, exit code, stdout, stderr, and duration. `ORCHESTRATION_TEST_MODE=mock` is the safe default for deterministic tests; `real` runs the configured command (default `npm test`) with `ORCHESTRATION_TEST_TIMEOUT_MS`. Reviewer approval is impossible without `test_evidence.status=passed`.
+Before job-level review, the project test gate runs and stores `test_evidence` with status `passed`, `failed`, `timeout`, or `error`, plus command, exit code, stdout, stderr, and duration. `ORCHESTRATION_TEST_MODE=mock` is the safe default for deterministic tests; `real` runs the configured command (default `npm test`) with `ORCHESTRATION_TEST_TIMEOUT_MS`. The child receives only the explicit cross-platform toolchain environment allowlist; captured output and launch errors are redacted and bounded before they become evidence or reach the Reviewer. Reviewer approval is impossible without `test_evidence.status=passed`.
+
+This environment allowlist and redaction reduce accidental credential exposure; they are not a sandbox for arbitrary test commands. A command that can read secret files available to the worker's OS identity may still access those files, so real test commands must only run in an appropriately isolated worker with no unnecessary secret files or permissions.
 
 ### Observability and limits
 
