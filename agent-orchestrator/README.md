@@ -40,7 +40,6 @@ REVIEW_MAX_OUTPUT_TOKENS=1200
 REVIEW_TIME_BUDGET_MS=240000
 REVIEW_COST_BUDGET_USD=0.50
 REVIEW_ESTIMATED_COST_PER_1K_TOKENS_USD=0.01
-REVIEW_MAX_EVENTS=1000
 # Legacy aliases remain supported for deep/manual compatibility.
 MAX_ROUNDS=3
 MAX_OUTPUT_TOKENS=1800
@@ -87,8 +86,16 @@ npm run start:mcp
 does not open a port. The HTTP listener starts only through `npm run start:mcp`,
 which preserves `/health`, MCP initialization, and the registered tool set.
 
-The Claude/OpenAI review loop uses 120-second per-request timeouts plus a
-Review cost is controlled by `REVIEW_MODE`, `REVIEW_MAX_CHUNKS`, `REVIEW_MAX_ROUNDS`, `REVIEW_MAX_PROVIDER_CALLS`, `REVIEW_MAX_OUTPUT_TOKENS`, `REVIEW_TIME_BUDGET_MS` and `REVIEW_COST_BUDGET_USD`. `REVIEW_MAX_EVENTS` bounds retained events (default `1000`). `cheap` is the default: Claude reviews each selected chunk once, OpenAI checks only concrete findings and performs the final adjudication. `standard` keeps the same Claude pass but allows OpenAI checks on risky chunks. `deep` retains the full legacy Claude/OpenAI round structure and should be enabled manually. Every structured result includes redacted usage metrics; stopping on a provider-call, chunk, time, or estimated-cost limit returns `final_status=COST_LIMIT`, a partial result, and `ready_to_merge=false`.
+The Claude/OpenAI review loop uses 120-second per-request timeouts and an
+overall deadline. Review cost is controlled by `REVIEW_MODE`, `REVIEW_MAX_CHUNKS`,
+`REVIEW_MAX_ROUNDS`, `REVIEW_MAX_PROVIDER_CALLS`, `REVIEW_MAX_OUTPUT_TOKENS`,
+`REVIEW_TIME_BUDGET_MS`, and `REVIEW_COST_BUDGET_USD`. `REVIEW_MAX_EVENTS`
+bounds retained structured events (default `1000`). `cheap` reviews selected
+chunks once with Claude and asks OpenAI to confirm findings and adjudicate.
+`standard` covers all chunks with Claude before targeted OpenAI confirmations;
+`deep` retains the full manual review sequence. Every result includes redacted
+usage metrics. A provider-call, chunk, time, or estimated-cost limit returns
+a structured partial result with `ready_to_merge=false`.
 
 The provider loop also retains a `REVIEW_LOOP_TIMEOUT_MS` deadline for compatibility. `REVIEW_LOOP_GUARD_MS` reserves time before starting another provider request; if the remaining deadline is too short, the loop stops and preserves the partial structured result with `ready_to_merge=false`.
 Structured `provider_started`, `provider_completed`, `provider_timeout`,
@@ -158,14 +165,14 @@ After the endpoint is reachable, add it as a custom MCP app/plugin in ChatGPT de
 
 ## Parallel orchestration MVP
 
-The MVP adds a non-blocking mock orchestration flow for the task shape “add an API function and tests”. It keeps the existing review tools unchanged and exposes:
+The MVP adds a non-blocking orchestration flow for the task shape “add an API function and tests”. It keeps the existing review tools unchanged and exposes:
 
 - `create_orchestration_job` — creates a job and immediately returns a `job_id`;
 - `get_job_status` — reads the persisted job and subtask statuses;
 - `get_job_result` — reads the final result when available;
 - `cancel_job` — cancels a queued or running job.
 
-The Planner routes task content to `backend`, `qa`, `frontend`, `database`, `security`, and `documentation` role templates. Routed role subtasks are independent unless the plan explicitly adds dependencies; a dependent `reviewer` subtask is added after all routed roles. Unknown task text receives a safe backend clarification fallback instead of speculative multi-role work. The scheduler runs at most two tasks concurrently by default, waits for dependencies, applies a bounded retry, enforces a timeout, and persists each job as an atomic JSON file under `JOB_STORAGE_DIR`. Mock mode remains the safe default; real mode delegates each subtask to the existing Claude/OpenAI review loop.
+The Planner routes task content to `backend`, `qa`, `frontend`, `database`, `security`, and `documentation` role templates. Routed role subtasks are independent unless the plan explicitly adds dependencies; a dependent `reviewer` subtask is added after all routed roles. Unknown task text receives a safe backend clarification fallback instead of speculative multi-role work. The scheduler runs at most two tasks concurrently by default, waits for dependencies, applies a bounded retry, enforces a timeout, and persists each job as an atomic JSON file under `JOB_STORAGE_DIR`. Mock mode remains the safe default.
 
 Supported job and subtask statuses are:
 
@@ -175,7 +182,11 @@ Direct changes to `main` are rejected by the workspace safety policy. Each subta
 
 ### Agent runner configuration
 
-`ORCHESTRATION_AGENT_MODE=mock` is the safe default. Set it to `real` only when the existing `OPENAI_API_KEY`, `OPENAI_MODEL`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_MODEL` configuration is available. The real adapter delegates each subtask to the existing `runAgentReview` loop and passes its assigned workspace path, branch, and base ref in the task context/environment. The deterministic mock adapter remains available for tests and local lifecycle checks. The real-runner smoke test is opt-in with `ORCHESTRATION_REAL_SMOKE=1` and is skipped by default.
+`ORCHESTRATION_AGENT_MODE=mock` is the safe default. In `real` mode the runner starts one local Codex CLI coding process per attempt with its current directory set to the subtask's dedicated Git worktree. The process runs with `workspace-write` inside that isolated worktree. `allowed_files` is an acceptance rule, not an OS- or sandbox-enforced write boundary: the executor and Integrator check the actual Git diff (including untracked files), and any changed path outside the assignment rejects the entire result before it is applied to the result worktree. Empty diffs and non-zero process exits also fail. The agent can still temporarily modify other files inside its own worktree before that check; those changes are not applied to the result worktree, but the temporary worktree contents remain exposed to the process until cleanup. The existing Claude/OpenAI `runAgentReview` loop remains a reviewer and is not used as a coding executor.
+
+Real coding mode requires `ORCHESTRATION_WORKSPACE_ROOT`, Git, and an authenticated `ORCHESTRATION_CODING_AGENT_COMMAND` (default `codex`) on the worker. On native Windows, `ORCHESTRATION_CODING_AGENT_WINDOWS_SANDBOX` is required and must name the worker's configured `elevated` or `unelevated` backend; the executor fails closed when it is missing and passes it explicitly because `--ignore-user-config` intentionally omits that user setting. Before any model call, a model-free Codex sandbox probe must create and remove a sentinel inside the assigned worktree; a denied write fails the subtask with `coding_agent_sandbox_read_only` or `coding_agent_sandbox_preflight_failed`. `ORCHESTRATION_CODING_AGENT_TIMEOUT_MS` and one child process per attempt are enforceable. The current Codex CLI does not expose a hard per-run token or dollar cap, so the orchestrator must not claim one; use a bounded number of attempts and a short timeout. Provider credentials are not copied into the child environment or logs. The deterministic mock adapter remains available for tests and local lifecycle checks.
+
+The real-runner smoke test is opt-in with `ORCHESTRATION_REAL_SMOKE=1`. It also requires `ORCHESTRATION_REAL_SMOKE_WORKSPACE` (a dedicated non-root worktree), `ORCHESTRATION_REAL_SMOKE_WORKSPACE_ROOT`, and `ORCHESTRATION_REAL_SMOKE_FILE`; it is skipped by default and must never target a shared checkout.
 
 Each orchestration subtask now receives a separate Git worktree under `ORCHESTRATION_WORKSPACE_ROOT`, created from the explicit non-`main` `ORCHESTRATION_BASE_REF`. Workspaces are retained after normal completion; cleanup is an explicit, idempotent operation and is never run automatically by the service.
 
