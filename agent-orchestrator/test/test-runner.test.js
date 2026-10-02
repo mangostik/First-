@@ -21,6 +21,7 @@ test("configured real runner reads command and timeout from environment", async 
   assert.equal(result.status, "passed");
   assert.equal(received[0], "node");
   assert.deepEqual(received[1], ["--version"]);
+  assert.equal(result.command, "configured-test-command");
 });
 
 test("real test runner passes only the cross-platform toolchain environment and bounds output", async () => {
@@ -75,7 +76,7 @@ test("real test runner redacts secrets from stdout, stderr, and spawn errors", a
   const failure = await errorRunner.run({});
   assert.equal(failure.status, "error");
   assert.doesNotMatch(JSON.stringify(failure), new RegExp(marker));
-  assert.match(failure.error, /spawn failed/);
+  assert.equal(failure.error, "test command could not complete");
   assert.match(failure.stdout, /partial \[REDACTED\]/);
   assert.match(failure.stderr, /diagnostic \[REDACTED\]/);
 });
@@ -116,7 +117,37 @@ test("real test runner maps non-zero exit code to failed", async () => {
   assert.equal(result.status, "failed");
   assert.equal(result.exit_code, 2);
   assert.equal(result.stderr, "assertion");
-  assert.equal(result.command, "fake-test --ci");
+  assert.equal(result.command, "configured-test-command");
+});
+
+test("real test runner never returns configured command arguments in evidence or errors", async () => {
+  const marker = "synthetic-command-only-secret-83f2";
+  const command = ["synthetic-test-runner", "--credential", marker];
+  const scenarios = [
+    { name: "success", executor: async (_file, args) => { assert.deepEqual(args, command.slice(1)); return { exitCode: 0, stdout: "safe success output", stderr: "" }; } },
+    { name: "nonzero", executor: async (_file, args) => { assert.deepEqual(args, command.slice(1)); return { exitCode: 3, stdout: "safe failure output", stderr: "safe failure detail" }; } },
+    { name: "spawn", executor: async (_file, args) => { assert.deepEqual(args, command.slice(1)); throw Object.assign(new Error(`spawn error included ${marker}`), { code: "ENOENT" }); } },
+    { name: "timeout", executor: async (_file, args) => { assert.deepEqual(args, command.slice(1)); throw Object.assign(new Error(`timeout included ${marker}`), { code: "ETIMEDOUT" }); } }
+  ];
+  for (const scenario of scenarios) {
+    const result = await createRealTestRunner({ command, env: {}, executor: scenario.executor }).run({});
+    assert.equal(result.command, "configured-test-command", scenario.name);
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(marker), scenario.name);
+  }
+
+  const controller = new AbortController();
+  controller.abort();
+  const cancelled = await createRealTestRunner({
+    command,
+    env: {},
+    executor: async (_file, args) => {
+      assert.deepEqual(args, command.slice(1));
+      throw Object.assign(new Error(`cancel included ${marker}`), { name: "AbortError" });
+    }
+  }).run({ signal: controller.signal });
+  assert.equal(cancelled.status, "error");
+  assert.equal(cancelled.command, "configured-test-command");
+  assert.doesNotMatch(JSON.stringify(cancelled), new RegExp(marker));
 });
 
 test("real test runner maps process errors to error and timeout evidence", async () => {

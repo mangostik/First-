@@ -4,6 +4,7 @@ import { redactSecrets } from "./observability.js";
 
 const execFileAsync = promisify(execFile);
 export const TEST_EVIDENCE_STATUSES = Object.freeze(["passed", "failed", "timeout", "error"]);
+const SAFE_TEST_COMMAND_LABEL = "configured-test-command";
 const MAX_OUTPUT_BYTES = 32 * 1024;
 const MAX_CAPTURE_BYTES = 256 * 1024;
 const SAFE_ENV_KEYS = new Set([
@@ -95,18 +96,18 @@ export function createRealTestRunner({ command = ["npm", "test"], executor = exe
           maxBuffer: MAX_CAPTURE_BYTES
         });
         const exitCode = result.exitCode ?? result.code ?? 0;
-        return evidence({ status: exitCode === 0 ? "passed" : "failed", command: args.join(" "), exitCode, stdout: sanitizeOutput(result.stdout, secrets), stderr: sanitizeOutput(result.stderr, secrets), durationMs: Date.now() - started });
+        return evidence({ status: exitCode === 0 ? "passed" : "failed", command: SAFE_TEST_COMMAND_LABEL, exitCode, stdout: sanitizeOutput(result.stdout, secrets), stderr: sanitizeOutput(result.stderr, secrets), durationMs: Date.now() - started });
       } catch (error) {
         const timedOut = error?.code === "ETIMEDOUT" || error?.killed || error?.signal === "SIGTERM";
         const cancelled = signal?.aborted || error?.name === "AbortError";
         return evidence({
           status: cancelled ? "error" : timedOut ? "timeout" : (Number.isInteger(error?.code) ? "failed" : "error"),
-          command: args.join(" "),
+          command: SAFE_TEST_COMMAND_LABEL,
           exitCode: Number.isInteger(error?.code) ? error.code : null,
           stdout: sanitizeOutput(error?.stdout, secrets),
           stderr: sanitizeOutput(error?.stderr, secrets),
           durationMs: Date.now() - started,
-          error: sanitizeOutput(error?.message || String(error), secrets)
+          error: cancelled ? "test command cancelled" : timedOut ? "test command timed out" : "test command could not complete"
         });
       }
     }

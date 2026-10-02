@@ -305,7 +305,8 @@ test("test-runner secrets never reach stored job JSON, Reviewer input, or MCP re
     assert.match(jobs[0].result.test_evidence.stdout, /ordinary test failure/);
     assert.match(jobs[0].result.test_evidence.stderr, /ordinary test diagnostic/);
     assert.equal(jobs[1].status.test_evidence.status, "error");
-    assert.match(jobs[1].result.test_evidence.error, /spawn diagnostic/);
+    assert.equal(jobs[1].result.test_evidence.error, "test command could not complete");
+    assert.match(jobs[1].result.test_evidence.stdout, /partial stdout/);
     assert.equal(reviewerInputs.length, 2);
 
     const handlers = {};
@@ -319,11 +320,64 @@ test("test-runner secrets never reach stored job JSON, Reviewer input, or MCP re
     assert.match(exposed, /REDACTED/);
     assert.match(exposed, /ordinary test failure/);
     assert.match(exposed, /ordinary test diagnostic/);
-    assert.match(exposed, /spawn diagnostic/);
+    assert.match(exposed, /test command could not complete/);
     for (const mcpResult of mcpResults) {
       assert.equal(mcpResult.isError, undefined);
       assert.doesNotMatch(mcpResult.content[0].text, /synthetic-(?:test|extra-env)-.*-secret/);
     }
     for (const evidence of reviewerInputs) assert.doesNotMatch(JSON.stringify(evidence), /synthetic-(?:test|extra-env)-.*-secret/);
+  } finally { await ctx.cleanup(); }
+});
+
+test("executed command arguments are never persisted or sent to Reviewer or MCP", async () => {
+  const ctx = await fixture();
+  try {
+    const marker = "synthetic-command-only-secret-83f2";
+    const script = `if (process.argv[1]?.length !== ${marker.length}) process.exit(9); process.stdout.write("safe executed-test output")`;
+    const reviewerEvidence = [];
+    const service = new OrchestrationService({
+      store: new JsonJobStore(join(ctx.repo, ".jobs-command-redaction")),
+      workspaceManager: ctx.manager,
+      runner: async ({ workspace }) => {
+        await writeFile(join(workspace.workspace_path, "reviewed-file.txt"), "verified change\n");
+        return { status: "completed", execution_mode: "real", git_verified: true, summary: "file changed", changed_files: [], tests: ["coding checks passed"], warnings: [], error: null };
+      },
+      planner: () => ({ subtasks: [
+        { id: "agent-a", role: "backend", title: "change file", instructions: "change file", allowed_files: ["reviewed-file.txt"], dependencies: [], status: "queued" }
+      ], dependencies: [], required_agents: ["backend"], risk_level: "low", acceptance_criteria: [] }),
+      reviewer: { mode: "mock", async review({ testEvidence }) {
+        reviewerEvidence.push(structuredClone(testEvidence));
+        return { final_decision: "rejected", summary: "reviewed test evidence", review_findings: ["test result recorded"], approved: false };
+      } },
+      testRunner: createRealTestRunner({
+        command: [process.execPath, "-e", script, marker],
+        env: { PATH: process.env.PATH }
+      }),
+      schedulerOptions: { maxRetries: 0, timeoutMs: 2_000, jobTimeoutMs: 5_000 }
+    });
+    service.baseRef = "base";
+    const created = await service.createJob("test command argument redaction");
+    await service.processes.get(created.job_id);
+
+    const job = await service.getStatus(created.job_id);
+    const result = await service.getResult(created.job_id);
+    assert.equal(job.test_evidence.status, "passed");
+    assert.equal(job.test_evidence.exit_code, 0);
+    assert.equal(typeof job.test_evidence.duration_ms, "number");
+    assert.ok(job.test_evidence.duration_ms >= 0);
+    assert.equal(job.test_evidence.command, "configured-test-command");
+    assert.match(job.test_evidence.stdout, /safe executed-test output/);
+    assert.equal(reviewerEvidence.length, 1);
+
+    const handlers = {};
+    registerOrchestrationTools({ registerTool(name, _metadata, handler) { handlers[name] = handler; } }, service);
+    const mcpResult = await handlers.get_job_result({ job_id: created.job_id });
+    const persisted = await readFile(service.store.pathFor(created.job_id), "utf8");
+    const exposed = JSON.stringify({ job, result, reviewerEvidence, mcpResult, persisted });
+    assert.equal(exposed.includes(marker), false);
+    assert.equal(exposed.includes("configured-test-command"), true);
+    assert.equal(exposed.includes("safe executed-test output"), true);
+    assert.equal(mcpResult.isError, undefined);
+    assert.equal(JSON.parse(mcpResult.content[0].text).test_evidence.status, "passed");
   } finally { await ctx.cleanup(); }
 });
